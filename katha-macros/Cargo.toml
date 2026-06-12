@@ -1,0 +1,28 @@
+[package]
+name = "katha-macros"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Proc-macro helpers for katha — #[derive(EventName)] and friends"
+license = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+readme = "README.md"
+rust-version = { workspace = true }
+keywords = ["event-sourcing", "derive"]
+categories = ["development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+trybuild = "1"
+katha = { path = "../katha" }
+
+# Single tag per release comes from the katha package; see workspace.metadata.release.
+[package.metadata.release]
+tag = false

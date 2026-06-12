@@ -1,0 +1,57 @@
+[package]
+name = "katha"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Event sourcing core traits, types, and SQLite/Postgres backend for Rust"
+license = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+readme = "README.md"
+rust-version = { workspace = true }
+keywords = ["event-sourcing", "cqrs", "event-store", "sqlite", "eventstore"]
+categories = ["database", "asynchronous"]
+
+[features]
+default = []
+# Enable #[derive(EventName)] for EventWrite::from_payload. Required for production use.
+macros = ["dep:katha-macros"]
+# Enable SQLite/Postgres backend via sqlx (SqlxEventStore, SqlxCommandStore, etc.).
+# Follows the sqlx precedent: backends are features, not sibling crates.
+sqlx = ["dep:sqlx", "dep:libsqlite3-sys", "dep:tokio-util"]
+
+[dependencies]
+chrono = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+katha-macros = { workspace = true, optional = true }
+
+# sqlx feature dependencies
+sqlx           = { workspace = true, features = ["chrono", "uuid", "migrate", "sqlite", "postgres", "any"], optional = true }
+libsqlite3-sys = { workspace = true, optional = true }
+tokio-util     = { workspace = true, optional = true }
+
+[dev-dependencies]
+katha-macros = { workspace = true }
+proptest = "1"
+tokio = { workspace = true }
+tempfile = { workspace = true }
+
+[[test]]
+name = "sqlx_event_store_tests"
+required-features = ["sqlx"]
+
+[[test]]
+name = "sqlx_command_store_tests"
+required-features = ["sqlx"]
+
+[[test]]
+name = "sqlx_property_tests"
+required-features = ["sqlx"]
+
+[[test]]
+name = "sqlx_behavioral_projection_flow_tests"
+required-features = ["sqlx"]
