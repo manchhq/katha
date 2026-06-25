@@ -111,6 +111,32 @@ guard — backed by an `EventStore` such as the one in
 
 Event versions are `u32`. Streams are intentionally time-sliced (one stream per entity-day or similar) so version numbers stay small. No snapshotting needed.
 
+## Why no snapshotting
+
+Snapshotting is valid, but katha treats it as an optimization of last resort —
+an architecture smell when reached for by default. If you *need* a snapshot to
+make replay affordable, the stream is probably too long. So katha keeps streams
+**compact and time-sliced** and always rebuilds state by folding events. No
+snapshots, no upcasting.
+
+This follows the "keep your streams short" school of event-sourcing design:
+
+- Oskar Dudycz — [*Keep your streams short!*](https://2022.dddeurope.com/program/keep-your-streams-short!-or-how-to-model-event-sourced-systems-efficiently/)
+  (DDD Europe 2022): too many events per stream costs performance, versioning, and
+  cognitive load; snapshots are an optimization for extreme cases and can go stale.
+- Greg Young — [*CQRS and Event Sourcing*](https://www.kurrent.io/blog/transcript-of-greg-youngs-talk-at-code-on-the-beach-2014-cqrs-and-event-sourcing)
+  (Code on the Beach 2014): snapshots as a *rolling-snapshot* optimization, not a baseline.
+- Jessica Kerr — [*EventSourcing & Reality*](https://www.youtube.com/watch?v=IvHyDyaUedA)
+  (EventSourcing Live 2021): the functional framing — current state is a fold over the event history.
+
+The trade-off this accepts is **projection ordering**. With per-entity streams
+and separate read models, dependent projections must be built in order — e.g. in
+an appointment tool you build the patients projection *before* the appointments
+projection. A snapshot-backed single global ledger would linearize all of that
+into "one line"; that convenience is exactly what we decline. Both designs have
+real pros and cons — katha chooses compact streams and absorbs the ordering
+discipline. See [arch.md](https://github.com/manchhq/katha/blob/main/katha/arch.md) for the longer rationale.
+
 ## Typed error roadmap
 
 The public API currently uses `anyhow::Result`. Typed errors at the `EventStore` / `CommandStore` trait boundary are planned — tracked in pi-health-apps/pi_dx#408.
