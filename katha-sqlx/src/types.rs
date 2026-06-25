@@ -1,3 +1,4 @@
+use crate::backend::Backend;
 use crate::notifications::EventNotification;
 use sqlx::AnyPool;
 use tokio::sync::broadcast;
@@ -7,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 pub struct SqlxEventStore {
     pub(crate) pool: AnyPool,
     pub(crate) name: String,
+    pub(crate) backend: Backend,
     pub(crate) notifier: broadcast::Sender<EventNotification>,
     pub(crate) cancel_token: CancellationToken,
 }
@@ -23,4 +25,5 @@ impl std::fmt::Debug for SqlxEventStore {
 pub struct SqlxCommandStore {
     pub(crate) pool: AnyPool,
     pub(crate) name: String,
+    pub(crate) backend: Backend,
 }

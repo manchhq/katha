@@ -13,6 +13,24 @@ jobs:
   test:
     name: Build & test
     runs-on: ubuntu-latest
+    # Postgres service backs the dual-backend integration tests (see
+    # KATHA_TEST_PG_URL below); without it those tests run only their SQLite leg.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: katha
+          POSTGRES_PASSWORD: katha
+          POSTGRES_DB: katha_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      KATHA_TEST_PG_URL: postgres://katha:katha@localhost:5432/katha_test
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -26,7 +44,7 @@ jobs:
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - name: Test (default features)
         run: cargo nextest run --workspace
-      - name: Test (all features)
+      - name: Test (all features, SQLite + Postgres)
         run: cargo nextest run --workspace --all-features
       - name: Doctests
         run: cargo test --doc --all-features
