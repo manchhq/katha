@@ -30,3 +30,21 @@ jobs:
         run: cargo nextest run --workspace --all-features
       - name: Doctests
         run: cargo test --doc --all-features
+
+  change-risk:
+    name: CRAP score (change risk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-binstall
+      - name: Install cargo-crap
+        run: cargo binstall -y cargo-crap
+      - name: Coverage (lcov)
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      - name: CRAP score (fail above 30)
+        run: cargo crap --lcov lcov.info --fail-above --threshold 30 --format github
