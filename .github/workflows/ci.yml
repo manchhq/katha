@@ -44,7 +44,9 @@ jobs:
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@cargo-binstall
       - name: Install cargo-crap
-        run: cargo binstall -y cargo-crap
+        # --force: rust-cache can restore cargo's install metadata without the
+        # binary, making binstall skip; force guarantees the binary is present.
+        run: cargo binstall -y --force cargo-crap
       # Same recipe used locally; --format github adds inline PR annotations.
       - name: CRAP score (fail above 30)
         run: just crap --format github
