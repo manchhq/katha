@@ -717,6 +717,7 @@ dependencies = [
  "quote",
  "syn",
  "trybuild",
+ "uuid",
 ]
 
 [[package]]
