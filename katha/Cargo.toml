@@ -2,7 +2,7 @@
 name = "katha"
 version = { workspace = true }
 edition = { workspace = true }
-description = "Event sourcing core traits, types, and SQLite/Postgres backend for Rust"
+description = "Event sourcing core traits and types for Rust (SQLite/Postgres backend in katha-sqlx)"
 license = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
