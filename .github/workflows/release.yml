@@ -15,20 +15,31 @@ jobs:
     name: Build, test & publish to crates.io
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: cargo build --workspace --all-features
+      - uses: taiki-e/install-action@nextest
+      - name: Verify tag matches crate version
+        run: |
+          VERSION=$(cargo pkgid -p katha | cut -d'#' -f2)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match crate version $VERSION" >&2
+            exit 1
+          fi
       - name: Test
-        run: cargo test --workspace --all-features
-      # katha depends on katha-macros, so the macros crate must land first.
-      # cargo waits for the publish to be visible in the index before returning.
+        run: cargo nextest run --workspace --all-features
+      - name: Doctests
+        run: cargo test --doc --all-features
+      # Publish in dependency order; cargo waits for each to appear in the index.
       - name: Publish katha-macros
         run: cargo publish -p katha-macros
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Publish katha
-        run: cargo publish -p katha --all-features
+        run: cargo publish -p katha
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish katha-sqlx
+        run: cargo publish -p katha-sqlx
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
