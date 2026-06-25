@@ -15,6 +15,13 @@ test:
 doc:
     cargo doc --workspace --all-features --no-deps
 
+# Change-risk report: coverage (llvm-cov) + cargo-crap; fails any function above CRAP 30.
+# Requires: cargo binstall cargo-llvm-cov cargo-crap  (or `cargo install`).
+# Extra args pass through to cargo-crap, e.g. `just crap --format github`.
+crap *args:
+    cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --fail-above --threshold 30 {{args}}
+
 # Format all crates
 fmt:
     cargo fmt --all

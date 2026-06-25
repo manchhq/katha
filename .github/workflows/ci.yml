@@ -41,10 +41,10 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@cargo-binstall
       - name: Install cargo-crap
         run: cargo binstall -y cargo-crap
-      - name: Coverage (lcov)
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      # Same recipe used locally; --format github adds inline PR annotations.
       - name: CRAP score (fail above 30)
-        run: cargo crap --lcov lcov.info --fail-above --threshold 30 --format github
+        run: just crap --format github
