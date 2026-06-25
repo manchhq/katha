@@ -20,7 +20,7 @@ A small, explicit event sourcing core for Rust. Inspired by the F# [CosmoStore](
 - `ExpectedVersion` — optimistic concurrency guard
 - Event and stream types
 - Optional `#[derive(EventName)]` macro via the `macros` feature
-- Optional SQLite/Postgres backend via the `sqlx` feature
+- SQLite/Postgres backend via the separate [`katha-sqlx`](https://crates.io/crates/katha-sqlx) crate
 
 ## What it does not do
 
@@ -32,7 +32,8 @@ A small, explicit event sourcing core for Rust. Inspired by the F# [CosmoStore](
 
 | Feature | Description |
 |---------|-------------|
-| `macros` | Enables `#[derive(EventName)]` proc macro for `EventWrite::from_payload`. Brings in `katha-macros`. |
+| `macros` | Enables `#[derive(EventName)]` proc macro for `EventWrite::from_payload`. Brings in `katha-macros`. Enabled by default. |
+
 The SQLite/Postgres backend now lives in the separate [`katha-sqlx`](https://crates.io/crates/katha-sqlx) crate.
 
 ## Usage
