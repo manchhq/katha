@@ -11,6 +11,10 @@ rust-version = { workspace = true }
 keywords = ["event-sourcing", "cqrs", "event-store", "sqlite", "eventstore"]
 categories = ["database", "asynchronous"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = ["macros"]
 # Enable #[derive(EventName)] for EventWrite::from_payload. Required for production use.
