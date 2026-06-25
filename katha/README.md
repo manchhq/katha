@@ -1,8 +1,12 @@
 # katha
 
+[![crates.io](https://img.shields.io/crates/v/katha.svg)](https://crates.io/crates/katha)
+[![docs.rs](https://img.shields.io/docsrs/katha)](https://docs.rs/katha)
+[![CI](https://github.com/manchhq/katha/actions/workflows/ci.yml/badge.svg)](https://github.com/manchhq/katha/actions/workflows/ci.yml)
+
 **कथा** — Hindi for "story" or "narrative." Event sourcing is the story of everything that happened in your system.
 
-Companion to [`kathputli`](https://github.com/manchhq) (कठपुतली — the actor framework in the Manch family).
+Companion to [`kathputli`](https://github.com/manchhq/kathputli) (कठपुतली — the actor framework in the Manch family).
 
 ---
 
@@ -29,24 +33,18 @@ A small, explicit event sourcing core for Rust. Inspired by the F# [CosmoStore](
 | Feature | Description |
 |---------|-------------|
 | `macros` | Enables `#[derive(EventName)]` proc macro for `EventWrite::from_payload`. Brings in `katha-macros`. |
-| `sqlx` | Enables `SqlxEventStore` and `SqlxCommandStore` — SQLite and Postgres backends. Backends are Cargo features, not sibling crates (the same approach sqlx itself uses for postgres/sqlite/mysql). |
+The SQLite/Postgres backend now lives in the separate [`katha-sqlx`](https://crates.io/crates/katha-sqlx) crate.
 
 ## Usage
 
 ```toml
 [dependencies]
-# Core only (traits and types):
-katha = { version = "0.1", features = ["macros"] }
+# Core (traits + types, includes the macros feature by default):
+katha = "0.2"
 
-# With SQLite/Postgres backend:
-katha = { version = "0.1", features = ["macros", "sqlx"] }
+# SQLite/Postgres backend:
+katha-sqlx = "0.2"
 ```
-
-## Why `sqlx` is a feature, not a separate crate
-
-`katha-sqlx` was originally a sibling crate. We folded it behind `katha`'s `sqlx` feature for the same reason sqlx itself gates postgres/sqlite/mysql as features: it avoids lockstep version maintenance across N crates and keeps the dependency graph simpler for consumers who only need the core traits.
-
-`katha-macros` remains a separate crate because proc-macro crates must be compiled separately by the Rust toolchain. It cannot be inlined.
 
 ## Notes on version type
 
@@ -56,4 +54,4 @@ Event versions are `u32`. Streams are intentionally time-sliced (one stream per 
 
 The public API currently uses `anyhow::Result`. Typed errors at the `EventStore` / `CommandStore` trait boundary are planned — tracked in pi-health-apps/pi_dx#408.
 
-See `arch.md` for design rationale.
+See [arch.md](https://github.com/manchhq/katha/blob/main/katha/arch.md) for design rationale.
