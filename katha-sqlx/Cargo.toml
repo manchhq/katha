@@ -30,7 +30,6 @@ sqlx = { workspace = true, features = ["chrono", "uuid", "migrate", "sqlite", "p
 libsqlite3-sys = { workspace = true }
 
 [dev-dependencies]
-katha = { workspace = true }
 proptest = "1"
 tempfile = { workspace = true }
 tokio = { workspace = true }

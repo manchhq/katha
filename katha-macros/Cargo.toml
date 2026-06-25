@@ -11,6 +11,10 @@ rust-version = { workspace = true }
 keywords = ["event-sourcing", "derive"]
 categories = ["development-tools::procedural-macro-helpers"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 proc-macro = true
 
