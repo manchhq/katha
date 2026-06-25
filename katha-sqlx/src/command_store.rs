@@ -1,4 +1,5 @@
 use crate::{
+    backend::Backend,
     command_db::{CommandReadDb, CommandWriteDb},
     error::DbConversionError,
     pagination::{CommandCursor, CommandCursorPage},
@@ -25,6 +26,7 @@ impl SqlxCommandStore {
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend: Backend::Sqlite,
         })
     }
 
@@ -37,6 +39,7 @@ impl SqlxCommandStore {
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend: Backend::Sqlite,
         })
     }
 
@@ -53,6 +56,7 @@ impl SqlxCommandStore {
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend: Backend::from_url(url),
         })
     }
 
@@ -62,9 +66,11 @@ impl SqlxCommandStore {
     /// creating the pool.
     pub async fn new_from_pool(name: &str, pool: AnyPool) -> Result<Self> {
         validate_store_name(name)?;
+        let backend = Backend::from_url(pool.connect_options().database_url.as_str());
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend,
         })
     }
 
@@ -116,11 +122,11 @@ where
     async fn append_command(&self, payload: &CommandWrite<Payload>) -> Result<()> {
         let command = CommandWriteDb::from(payload);
 
-        sqlx::query(&format!(
+        sqlx::query(&self.backend.bind(&format!(
             r#"INSERT INTO "{}_commands" (id, correlation_id, causation_id, data, name, created_utc)
             VALUES (?, ?, ?, ?, ?, ?)"#,
             self.name
-        ))
+        )))
         .bind(&command.id)
         .bind(&command.correlation_id)
         .bind(&command.causation_id)
@@ -135,11 +141,11 @@ where
 
     /// Fetches one command log entry by command id.
     async fn get_command(&self, id: &Uuid) -> Result<Option<CommandRead<Payload>>> {
-        let row = sqlx::query_as::<_, CommandReadDb>(&format!(
+        let row = sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
             r#"SELECT id, correlation_id, causation_id, data, name, created_utc
             FROM "{}_commands" WHERE id = ?"#,
             self.name
-        ))
+        )))
         .bind(id.to_string())
         .fetch_optional(&self.pool)
         .await?;
@@ -157,26 +163,26 @@ where
     ) -> Result<Vec<CommandRead<Payload>>> {
         let rows = match limit {
             Some(limit) => {
-                sqlx::query_as::<_, CommandReadDb>(&format!(
+                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
                     r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                     FROM "{}_commands"
                     ORDER BY created_utc DESC
                     LIMIT ? OFFSET ?"#,
                     self.name
-                ))
+                )))
                 .bind(limit as i64)
                 .bind(offset as i64)
                 .fetch_all(&self.pool)
                 .await?
             }
             None => {
-                sqlx::query_as::<_, CommandReadDb>(&format!(
+                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
                     r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                     FROM "{}_commands"
                     ORDER BY created_utc DESC
                     LIMIT 9223372036854775807 OFFSET ?"#,
                     self.name
-                ))
+                )))
                 .bind(offset as i64)
                 .fetch_all(&self.pool)
                 .await?
@@ -209,26 +215,26 @@ impl SqlxCommandStore {
 
         let rows = match cursor {
             None => {
-                sqlx::query_as::<_, CommandReadDb>(&format!(
+                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
                     r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                 FROM "{}_commands"
                 ORDER BY created_utc DESC, id DESC
                 LIMIT ?"#,
                     self.name
-                ))
+                )))
                 .bind(fetch_limit)
                 .fetch_all(&self.pool)
                 .await?
             }
             Some(c) => {
-                sqlx::query_as::<_, CommandReadDb>(&format!(
+                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
                     r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                 FROM "{}_commands"
                 WHERE (created_utc, id) < (?, ?)
                 ORDER BY created_utc DESC, id DESC
                 LIMIT ?"#,
                     self.name
-                ))
+                )))
                 .bind(c.created_utc.to_rfc3339())
                 .bind(c.id.to_string())
                 .bind(fetch_limit)

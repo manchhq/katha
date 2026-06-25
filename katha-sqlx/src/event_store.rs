@@ -1,5 +1,6 @@
 use crate::{
     DEFAULT_NOTIFICATION_BUFFER, EventNotification, SqlxEventStore,
+    backend::Backend,
     error::DbConversionError,
     event_db::{EventReadDb, StreamsDb},
     pagination::EventCursorPage,
@@ -43,6 +44,7 @@ impl SqlxEventStore {
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend: Backend::Sqlite,
             notifier,
             cancel_token: CancellationToken::new(),
         })
@@ -67,6 +69,7 @@ impl SqlxEventStore {
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend: Backend::Sqlite,
             notifier,
             cancel_token: CancellationToken::new(),
         })
@@ -94,6 +97,7 @@ impl SqlxEventStore {
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend: Backend::from_url(url),
             notifier,
             cancel_token: CancellationToken::new(),
         })
@@ -105,10 +109,12 @@ impl SqlxEventStore {
     /// creating the pool.
     pub async fn new_from_pool(name: &str, pool: AnyPool) -> Result<Self> {
         validate_store_name(name)?;
+        let backend = Backend::from_url(pool.connect_options().database_url.as_str());
         let (notifier, _) = broadcast::channel(DEFAULT_NOTIFICATION_BUFFER);
         Ok(Self {
             name: name.to_string(),
             pool,
+            backend,
             notifier,
             cancel_token: CancellationToken::new(),
         })
@@ -187,14 +193,14 @@ impl SqlxEventStore {
         projection_name: &str,
         event_id: &Uuid,
     ) -> Result<bool> {
-        let result = sqlx::query(&format!(
+        let result = sqlx::query(&self.backend.bind(&format!(
             r#"
             INSERT INTO "{}_projection_processed" (projection_name, event_id, processed_utc)
             VALUES (?, ?, ?)
             ON CONFLICT DO NOTHING
             "#,
             self.name
-        ))
+        )))
         .bind(projection_name)
         .bind(event_id.to_string())
         .bind(Utc::now().to_rfc3339())
@@ -206,13 +212,13 @@ impl SqlxEventStore {
 
     /// Returns whether a projection has already processed a given event.
     pub async fn is_event_processed(&self, projection_name: &str, event_id: &Uuid) -> Result<bool> {
-        let row = sqlx::query_scalar::<_, i64>(&format!(
+        let row = sqlx::query_scalar::<_, i64>(&self.backend.bind(&format!(
             r#"
             SELECT COUNT(1) FROM "{}_projection_processed"
             WHERE projection_name = ? AND event_id = ?
             "#,
             self.name
-        ))
+        )))
         .bind(projection_name)
         .bind(event_id.to_string())
         .fetch_one(&self.pool)
@@ -252,13 +258,13 @@ impl SqlxEventStore {
         }
 
         if let Err(error) = apply(event).await {
-            sqlx::query(&format!(
+            sqlx::query(&self.backend.bind(&format!(
                 r#"
                 DELETE FROM "{}_projection_processed"
                 WHERE projection_name = ? AND event_id = ?
                 "#,
                 self.name
-            ))
+            )))
             .bind(projection_name)
             .bind(event.id.to_string())
             .execute(&self.pool)
@@ -293,14 +299,14 @@ impl SqlxEventStore {
         F: FnOnce(&EventRead<Payload, Meta>, &mut Transaction<'c, Any>) -> Fut,
         Fut: Future<Output = Result<()>>,
     {
-        let result = sqlx::query(&format!(
+        let result = sqlx::query(&self.backend.bind(&format!(
             r#"
             INSERT INTO "{}_projection_processed" (projection_name, event_id, processed_utc)
             VALUES (?, ?, ?)
             ON CONFLICT DO NOTHING
             "#,
             self.name
-        ))
+        )))
         .bind(projection_name)
         .bind(event.id.to_string())
         .bind(Utc::now().to_rfc3339())
@@ -334,10 +340,10 @@ impl SqlxEventStore {
             anyhow::anyhow!("Stream version overflow: batch size would exceed u32::MAX")
         })?;
 
-        let stream_opt = sqlx::query_as::<_, StreamsDb>(&format!(
+        let stream_opt = sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
             "SELECT id, last_version, last_updated_utc FROM \"{}_streams\" WHERE id = ? LIMIT 1",
             self.name
-        ))
+        )))
         .bind(stream_id)
         .fetch_optional(&self.pool)
         .await?;
@@ -438,12 +444,12 @@ impl SqlxEventStore {
 
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(&format!(
+        sqlx::query(&self.backend.bind(&format!(
             r#"INSERT INTO "{}_streams" (id, last_version, last_updated_utc)
             VALUES (?, ?, ?) ON CONFLICT(id)
             DO UPDATE SET last_version = excluded.last_version, last_updated_utc = excluded.last_updated_utc"#,
             self.name
-        ))
+        )))
         .bind(&updated_stream_db.id)
         .bind(updated_stream_db.last_version)
         .bind(&updated_stream_db.last_updated_utc)
@@ -451,11 +457,11 @@ impl SqlxEventStore {
         .await?;
 
         for event in &event_reads_db {
-            sqlx::query(&format!(
+            sqlx::query(&self.backend.bind(&format!(
                 r#"INSERT INTO "{}_events" (id, correlation_id, causation_id, stream_id, version, name, data, metadata, created_utc)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                 self.name
-            ))
+            )))
             .bind(&event.id)
             .bind(&event.correlation_id)
             .bind(&event.causation_id)
@@ -497,14 +503,14 @@ impl SqlxEventStore {
         let fetch_limit = (limit.max(1) + 1) as i64;
         let start_after = cursor.map_or(-1_i64, i64::from);
 
-        let rows = sqlx::query_as::<_, EventReadDb>(&format!(
+        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
             r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE stream_id = ? AND version > ?
             ORDER BY version ASC
             LIMIT ?"#,
             self.name
-        ))
+        )))
         .bind(stream_id)
         .bind(start_after)
         .bind(fetch_limit)
@@ -562,6 +568,7 @@ where
         let mut source = self.subscribe();
         let pool = self.pool.clone();
         let store_name = self.name.clone();
+        let backend = self.backend;
         let cancel_token = self.cancel_token.clone();
         let (tx, rx) = broadcast::channel(DEFAULT_NOTIFICATION_BUFFER);
 
@@ -578,12 +585,12 @@ where
                 };
 
                 for event_id in notification.event_ids {
-                    let row = sqlx::query_as::<_, EventReadDb>(&format!(
+                    let row = sqlx::query_as::<_, EventReadDb>(&backend.bind(&format!(
                         r#"SELECT id, correlation_id, causation_id, stream_id,
                         version, name, data, metadata, created_utc FROM "{}_events"
                         WHERE id = ? LIMIT 1"#,
                         store_name
-                    ))
+                    )))
                     .bind(event_id.to_string())
                     .fetch_optional(&pool)
                     .await;
@@ -626,12 +633,12 @@ where
     }
 
     async fn get_event(&self, stream_id: &str, version: u32) -> Result<EventRead<Payload, Meta>> {
-        let row = sqlx::query_as::<_, EventReadDb>(&format!(
+        let row = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
             r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE stream_id = ? AND version = ?"#,
             self.name
-        ))
+        )))
         .bind(stream_id)
         .bind(version as i64)
         .fetch_optional(&self.pool)
@@ -659,13 +666,13 @@ where
             } => (*from_version, *to_version),
         };
 
-        let rows = sqlx::query_as::<_, EventReadDb>(&format!(
+        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
             r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE stream_id = ? AND version >= ? AND version <= ?
             ORDER BY version ASC"#,
             self.name
-        ))
+        )))
         .bind(stream_id)
         .bind(start_version as i64)
         .bind(end_version as i64)
@@ -682,12 +689,12 @@ where
         &self,
         correlation_id: &Uuid,
     ) -> Result<Vec<EventRead<Payload, Meta>>> {
-        let rows = sqlx::query_as::<_, EventReadDb>(&format!(
+        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
             r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE correlation_id = ? ORDER BY created_utc ASC"#,
             self.name
-        ))
+        )))
         .bind(correlation_id.to_string())
         .fetch_all(&self.pool)
         .await?;
@@ -702,12 +709,12 @@ where
         &self,
         causation_id: &Uuid,
     ) -> Result<Vec<EventRead<Payload, Meta>>> {
-        let rows = sqlx::query_as::<_, EventReadDb>(&format!(
+        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
             r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE causation_id = ? ORDER BY created_utc ASC"#,
             self.name
-        ))
+        )))
         .bind(causation_id.to_string())
         .fetch_all(&self.pool)
         .await?;
@@ -726,46 +733,46 @@ where
             ))
             .fetch_all(&self.pool)
             .await?,
-            StreamsReadFilter::BeforeVersion(version) => sqlx::query_as::<_, StreamsDb>(&format!(
+            StreamsReadFilter::BeforeVersion(version) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_version < ?"#,
                 self.name
-            ))
+            )))
             .bind(*version as i64)
             .fetch_all(&self.pool)
             .await?,
-            StreamsReadFilter::AfterVersion(version) => sqlx::query_as::<_, StreamsDb>(&format!(
+            StreamsReadFilter::AfterVersion(version) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_version > ?"#,
                 self.name
-            ))
+            )))
             .bind(*version as i64)
             .fetch_all(&self.pool)
             .await?,
-            StreamsReadFilter::BetweenVersions(start, end) => sqlx::query_as::<_, StreamsDb>(&format!(
+            StreamsReadFilter::BetweenVersions(start, end) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_version >= ? AND last_version <= ?"#,
                 self.name
-            ))
+            )))
             .bind(*start as i64)
             .bind(*end as i64)
             .fetch_all(&self.pool)
             .await?,
-            StreamsReadFilter::BeforeTime(time) => sqlx::query_as::<_, StreamsDb>(&format!(
+            StreamsReadFilter::BeforeTime(time) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_updated_utc < ?"#,
                 self.name
-            ))
+            )))
             .bind(time.to_rfc3339())
             .fetch_all(&self.pool)
             .await?,
-            StreamsReadFilter::AfterTime(time) => sqlx::query_as::<_, StreamsDb>(&format!(
+            StreamsReadFilter::AfterTime(time) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_updated_utc > ?"#,
                 self.name
-            ))
+            )))
             .bind(time.to_rfc3339())
             .fetch_all(&self.pool)
             .await?,
-            StreamsReadFilter::BetweenTimes(start, end) => sqlx::query_as::<_, StreamsDb>(&format!(
+            StreamsReadFilter::BetweenTimes(start, end) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_updated_utc >= ? AND last_updated_utc <= ?"#,
                 self.name
-            ))
+            )))
             .bind(start.to_rfc3339())
             .bind(end.to_rfc3339())
             .fetch_all(&self.pool)
@@ -779,10 +786,10 @@ where
     }
 
     async fn get_stream(&self, stream_id: &str) -> Result<EventStream> {
-        let row = sqlx::query_as::<_, StreamsDb>(&format!(
+        let row = sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
             r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE id = ?"#,
             self.name
-        ))
+        )))
         .bind(stream_id)
         .fetch_optional(&self.pool)
         .await?;

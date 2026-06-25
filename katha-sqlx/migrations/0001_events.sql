@@ -1,6 +1,9 @@
+-- Version columns are BIGINT, not INTEGER. Versions are bound and decoded as
+-- i64 in Rust. On Postgres INTEGER is i32 and would reject an i64 bind, while
+-- SQLite gives both INTEGER affinity, so BIGINT is portable across backends.
 CREATE TABLE IF NOT EXISTS "{{name}}_streams" (
     id TEXT PRIMARY KEY,
-    last_version INTEGER NOT NULL,
+    last_version BIGINT NOT NULL,
     last_updated_utc TEXT NOT NULL
 );
 
@@ -9,7 +12,7 @@ CREATE TABLE IF NOT EXISTS "{{name}}_events" (
     correlation_id TEXT,
     causation_id TEXT,
     stream_id TEXT NOT NULL,
-    version INTEGER NOT NULL,
+    version BIGINT NOT NULL,
     name TEXT NOT NULL,
     data TEXT NOT NULL,
     metadata TEXT,
