@@ -34,3 +34,7 @@ katha = { workspace = true }
 proptest = "1"
 tempfile = { workspace = true }
 tokio = { workspace = true }
+
+# Single tag per release comes from the katha package; see workspace.metadata.release.
+[package.metadata.release]
+tag = false
