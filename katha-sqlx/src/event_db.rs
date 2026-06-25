@@ -1,7 +1,7 @@
-use crate::sqlx_store::error::DbConversionError;
-use crate::types::event_read::EventRead;
-use crate::types::event_stream::EventStream;
+use crate::error::DbConversionError;
 use chrono::{DateTime, Utc};
+use katha::types::event_read::EventRead;
+use katha::types::event_stream::EventStream;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::convert::TryFrom;

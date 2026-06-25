@@ -1,20 +1,20 @@
-use crate::sqlx_store::{
+use crate::{
     DEFAULT_NOTIFICATION_BUFFER, EventNotification, SqlxEventStore,
     error::DbConversionError,
     event_db::{EventReadDb, StreamsDb},
     pagination::EventCursorPage,
     validate::validate_store_name,
 };
-use crate::traits::event_store::EventStore;
-use crate::types::event_read::EventRead;
-use crate::types::event_read_range::EventsReadRange;
-use crate::types::event_stream::EventStream;
-use crate::types::event_write::EventWrite;
-use crate::types::expected_version::ExpectedVersion;
-use crate::types::stream_read_filter::StreamsReadFilter;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
+use katha::traits::event_store::EventStore;
+use katha::types::event_read::EventRead;
+use katha::types::event_read_range::EventsReadRange;
+use katha::types::event_stream::EventStream;
+use katha::types::event_write::EventWrite;
+use katha::types::expected_version::ExpectedVersion;
+use katha::types::stream_read_filter::StreamsReadFilter;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     AnyPool, Executor, Transaction,
@@ -129,7 +129,7 @@ impl SqlxEventStore {
 
     /// Ensures stream and event tables exist by running the event migration file.
     async fn ensure_event_tables(&self) -> Result<()> {
-        let template = include_str!("../../migrations/0001_events.sql");
+        let template = include_str!("../migrations/0001_events.sql");
         let sql = template.replace("{{name}}", &self.name);
 
         let mut tx = self.pool.begin().await?;

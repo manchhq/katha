@@ -1,10 +1,7 @@
-#![cfg(feature = "sqlx")]
-
 mod common;
 use chrono::Utc;
 use common::{create_and_setup_local_store, create_and_setup_memory_store};
 use katha::{
-    SqlxEventStore,
     traits::event_store::EventStore,
     types::{
         event_read::EventRead, event_read_range::EventsReadRange, event_stream::EventStream,
@@ -12,6 +9,7 @@ use katha::{
         stream_read_filter::StreamsReadFilter,
     },
 };
+use katha_sqlx::SqlxEventStore;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     Arc,

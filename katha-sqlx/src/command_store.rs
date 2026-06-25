@@ -1,14 +1,14 @@
-use crate::sqlx_store::{
+use crate::{
     command_db::{CommandReadDb, CommandWriteDb},
     error::DbConversionError,
     pagination::{CommandCursor, CommandCursorPage},
     types::SqlxCommandStore,
     validate::validate_store_name,
 };
-use crate::traits::command_store::CommandStore;
-use crate::types::command_write::{CommandRead, CommandWrite};
 use anyhow::Result;
 use async_trait::async_trait;
+use katha::traits::command_store::CommandStore;
+use katha::types::command_write::{CommandRead, CommandWrite};
 use serde::{Deserialize, Serialize};
 use sqlx::{AnyPool, Executor, any::AnyPoolOptions};
 use uuid::Uuid;
@@ -71,8 +71,8 @@ impl SqlxCommandStore {
     /// Ensures command-store tables exist by running the command migration files.
     async fn ensure_command_tables(&self) -> Result<()> {
         let migrations = [
-            include_str!("../../migrations/0001_commands.sql"),
-            include_str!("../../migrations/0002_commands_add_causation_id.sql"),
+            include_str!("../migrations/0001_commands.sql"),
+            include_str!("../migrations/0002_commands_add_causation_id.sql"),
         ];
 
         let mut tx = self.pool.begin().await?;
