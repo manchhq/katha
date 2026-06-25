@@ -14,16 +14,19 @@ jobs:
     name: Build & test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
-      - name: Build
-        run: cargo build --workspace --all-features
-      - name: Test
-        run: cargo test --workspace --all-features
+      - name: Test (default features)
+        run: cargo nextest run --workspace
+      - name: Test (all features)
+        run: cargo nextest run --workspace --all-features
+      - name: Doctests
+        run: cargo test --doc --all-features
