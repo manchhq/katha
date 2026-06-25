@@ -47,6 +47,66 @@ katha = "0.2"
 katha-sqlx = "0.2"
 ```
 
+## The functional core
+
+`katha` is functional-first: your domain is **pure functions over events**, and
+all I/O lives at the edges. An `Aggregate` is three pure functions — `init` (the
+empty state), `apply` (fold one event into state), and `execute` (decide which
+events a command produces, or reject it). No mutation, no framework, no I/O:
+
+```rust
+use katha::Aggregate;
+use anyhow::Result;
+
+#[derive(Clone)]
+struct Account {
+    balance: i64,
+}
+
+enum Command {
+    Deposit(i64),
+    Withdraw(i64),
+}
+
+#[derive(Clone)]
+enum Event {
+    Deposited(i64),
+    Withdrawn(i64),
+}
+
+struct Bank;
+
+impl Aggregate<Account, Command, Event> for Bank {
+    // the empty state
+    fn init(&self) -> Account {
+        Account { balance: 0 }
+    }
+
+    // fold one event into state — pure
+    fn apply(&self, state: Account, event: &Event) -> Account {
+        match event {
+            Event::Deposited(n) => Account { balance: state.balance + n },
+            Event::Withdrawn(n) => Account { balance: state.balance - n },
+        }
+    }
+
+    // decide events from a command — pure; return Err to reject
+    fn execute(&self, state: &Account, command: &Command) -> Result<Vec<Event>> {
+        match command {
+            Command::Deposit(n) => Ok(vec![Event::Deposited(*n)]),
+            Command::Withdraw(n) if state.balance >= *n => Ok(vec![Event::Withdrawn(*n)]),
+            Command::Withdraw(_) => Err(anyhow::anyhow!("insufficient funds")),
+        }
+    }
+}
+```
+
+The imperative shell is just glue: `make_handler` and
+`load_state_and_expected_version` rehydrate state by folding stored events, run
+`execute`, and append the result under an `ExpectedVersion` optimistic-concurrency
+guard — backed by an `EventStore` such as the one in
+[`katha-sqlx`](https://crates.io/crates/katha-sqlx).
+
 ## Notes on version type
 
 Event versions are `u32`. Streams are intentionally time-sliced (one stream per entity-day or similar) so version numbers stay small. No snapshotting needed.

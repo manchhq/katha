@@ -26,6 +26,7 @@ syn = { version = "2", features = ["full"] }
 [dev-dependencies]
 trybuild = "1"
 katha = { path = "../katha" }
+uuid = { workspace = true }
 
 # Single tag per release comes from the katha package; see workspace.metadata.release.
 [package.metadata.release]
