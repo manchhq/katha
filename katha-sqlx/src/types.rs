@@ -1,4 +1,4 @@
-use crate::sqlx_store::notifications::EventNotification;
+use crate::notifications::EventNotification;
 use sqlx::AnyPool;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;

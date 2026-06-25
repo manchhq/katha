@@ -1,0 +1,39 @@
+[package]
+name = "katha-sqlx"
+version = { workspace = true }
+edition = { workspace = true }
+description = "SQLite/Postgres event-sourcing backend for katha (SqlxEventStore, SqlxCommandStore)"
+license = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+readme = "README.md"
+rust-version = { workspace = true }
+keywords = ["event-sourcing", "cqrs", "sqlx", "sqlite", "postgres"]
+categories = ["database", "asynchronous"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+# Backend depends ONLY on core katha (no macros) — preserves the core invariant.
+katha = { workspace = true, default-features = false }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true }
+sqlx = { workspace = true, features = ["chrono", "uuid", "migrate", "sqlite", "postgres", "any"] }
+libsqlite3-sys = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+# Single tag per release comes from the katha package; see workspace.metadata.release.
+[package.metadata.release]
+tag = false

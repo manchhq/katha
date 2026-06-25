@@ -1,6 +1,6 @@
-use crate::sqlx_store::error::DbConversionError;
-use crate::types::command_write::{CommandRead, CommandWrite};
+use crate::error::DbConversionError;
 use chrono::{DateTime, Utc};
+use katha::types::command_write::{CommandRead, CommandWrite};
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use uuid::Uuid;

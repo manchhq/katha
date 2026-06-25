@@ -1,6 +1,9 @@
 # katha-macros
 
-Proc-macro helpers for [`katha`](../katha) — the event sourcing crate.
+[![crates.io](https://img.shields.io/crates/v/katha-macros.svg)](https://crates.io/crates/katha-macros)
+[![docs.rs](https://img.shields.io/docsrs/katha-macros)](https://docs.rs/katha-macros)
+
+Proc-macro helpers for [`katha`](https://github.com/manchhq/katha) — the event sourcing crate.
 
 ## `#[derive(EventName)]`
 
@@ -40,5 +43,5 @@ single exception forced by the language.
 Enable via `katha`'s `macros` feature:
 
 ```toml
-katha = { version = "0.1", features = ["macros"] }
+katha = "0.2"
 ```

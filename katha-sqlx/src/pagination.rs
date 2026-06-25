@@ -1,6 +1,6 @@
-use crate::types::command_write::CommandRead;
-use crate::types::event_read::EventRead;
 use chrono::{DateTime, Utc};
+use katha::types::command_write::CommandRead;
+use katha::types::event_read::EventRead;
 use uuid::Uuid;
 
 /// Cursor page result for event stream reads.

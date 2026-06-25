@@ -11,6 +11,10 @@ rust-version = { workspace = true }
 keywords = ["event-sourcing", "derive"]
 categories = ["development-tools::procedural-macro-helpers"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 proc-macro = true
 
@@ -22,6 +26,7 @@ syn = { version = "2", features = ["full"] }
 [dev-dependencies]
 trybuild = "1"
 katha = { path = "../katha" }
+uuid = { workspace = true }
 
 # Single tag per release comes from the katha package; see workspace.metadata.release.
 [package.metadata.release]

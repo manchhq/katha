@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use katha::traits::command_store::CommandStore;
 use katha::traits::event_store::EventStore;
-use katha::{SqlxCommandStore, SqlxEventStore};
+use katha_sqlx::{SqlxCommandStore, SqlxEventStore};
 
 pub async fn create_and_setup_memory_store() -> SqlxEventStore {
     let store = SqlxEventStore::new_memory("test_store").await.unwrap();

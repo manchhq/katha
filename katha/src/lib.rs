@@ -1,8 +1,7 @@
+#![doc = include_str!("../README.md")]
+
 pub mod traits;
 pub mod types;
-
-#[cfg(feature = "sqlx")]
-pub mod sqlx_store;
 
 // Re-exports for ergonomic imports
 pub use traits::aggregate::{
@@ -16,10 +15,3 @@ pub use types::event_read::EventRead;
 pub use types::event_read_range::EventsReadRange;
 pub use types::event_write::EventWrite;
 pub use types::expected_version::ExpectedVersion;
-
-// sqlx feature re-exports
-#[cfg(feature = "sqlx")]
-pub use sqlx_store::{
-    CommandCursor, CommandCursorPage, DEFAULT_NOTIFICATION_BUFFER, EventCursorPage,
-    EventNotification, ProjectionRunStats, SqlxCommandStore, SqlxEventStore,
-};

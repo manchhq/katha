@@ -6,9 +6,14 @@ default:
 build:
     cargo build --workspace --all-features
 
-# Run the test suite with all features
+# Run the test suite with all features (nextest) + doctests
 test:
-    cargo test --workspace --all-features
+    cargo nextest run --workspace --all-features
+    cargo test --doc --all-features
+
+# Build docs the way docs.rs does (all features)
+doc:
+    cargo doc --workspace --all-features --no-deps
 
 # Format all crates
 fmt:

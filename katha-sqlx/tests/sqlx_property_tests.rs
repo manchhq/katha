@@ -1,10 +1,7 @@
-#![cfg(feature = "sqlx")]
-
 mod common;
 
 use common::{create_and_setup_memory_command_store, create_and_setup_memory_store};
 use katha::{
-    SqlxCommandStore, SqlxEventStore,
     traits::command_store::CommandStore,
     traits::event_store::EventStore,
     types::{
@@ -14,6 +11,7 @@ use katha::{
         expected_version::ExpectedVersion,
     },
 };
+use katha_sqlx::{SqlxCommandStore, SqlxEventStore};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{

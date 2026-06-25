@@ -1,14 +1,12 @@
-#![cfg(feature = "sqlx")]
-
 mod common;
 
 use chrono::{TimeZone, Utc};
 use common::create_and_setup_memory_command_store;
 use katha::{
-    CommandCursor, SqlxCommandStore,
     traits::command_store::CommandStore,
     types::command_write::{CommandRead, CommandWrite},
 };
+use katha_sqlx::{CommandCursor, SqlxCommandStore};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

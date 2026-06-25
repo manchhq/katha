@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod command_db;
 mod command_store;
 mod error;

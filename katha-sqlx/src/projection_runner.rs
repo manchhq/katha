@@ -1,6 +1,6 @@
-use crate::sqlx_store::SqlxEventStore;
-use crate::types::event_read::EventRead;
+use crate::SqlxEventStore;
 use anyhow::Result;
+use katha::types::event_read::EventRead;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use tokio::sync::broadcast;
