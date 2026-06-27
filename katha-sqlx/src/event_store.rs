@@ -9,6 +9,7 @@ use crate::{
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
+use katha::ConcurrencyConflict;
 use katha::traits::event_store::EventStore;
 use katha::types::event_read::EventRead;
 use katha::types::event_read_range::EventsReadRange;
@@ -398,17 +399,20 @@ impl SqlxEventStore {
                         anyhow::anyhow!("Stream version overflow: would exceed u32::MAX")
                     })?;
                     if *v != next_version {
-                        return Err(anyhow::anyhow!(
-                            "Expected version {} but next available version is {}",
-                            v,
-                            next_version
-                        ));
+                        return Err(ConcurrencyConflict {
+                            stream_id: stream_id.to_string(),
+                            expected: *v,
+                            actual: next_version,
+                        }
+                        .into());
                     }
                 } else if *v != 0 {
-                    return Err(anyhow::anyhow!(
-                        "Expected version {} but stream doesn't exist",
-                        v
-                    ));
+                    return Err(ConcurrencyConflict {
+                        stream_id: stream_id.to_string(),
+                        expected: *v,
+                        actual: 0,
+                    }
+                    .into());
                 }
                 *v
             }
@@ -731,6 +735,13 @@ where
                 r#"SELECT id, last_version, last_updated_utc FROM "{}_streams""#,
                 self.name
             ))
+            .fetch_all(&self.pool)
+            .await?,
+            StreamsReadFilter::IdPrefix(prefix) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
+                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE id LIKE ?"#,
+                self.name
+            )))
+            .bind(format!("{prefix}%"))
             .fetch_all(&self.pool)
             .await?,
             StreamsReadFilter::BeforeVersion(version) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(

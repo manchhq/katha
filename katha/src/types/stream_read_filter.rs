@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 ///
 /// # Variants
 /// * `AllStreams` - Read all streams without filtering
+/// * `IdPrefix(String)` - Read streams whose id starts with the given prefix
 /// * `BeforeVersion(u32)` - Read streams with last_version before the given version
 /// * `AfterVersion(u32)` - Read streams with last_version after the given version
 /// * `BetweenVersions(u32, u32)` - Read streams with last_version in the given range
@@ -16,6 +17,7 @@ use chrono::{DateTime, Utc};
 #[derive(Clone, Debug)]
 pub enum StreamsReadFilter {
     AllStreams,
+    IdPrefix(String),
     BeforeVersion(u32),
     AfterVersion(u32),
     BetweenVersions(u32, u32),

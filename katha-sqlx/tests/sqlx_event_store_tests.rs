@@ -2,6 +2,7 @@ mod common;
 use chrono::Utc;
 use common::{create_and_setup_local_store, create_and_setup_memory_store};
 use katha::{
+    ConcurrencyConflict,
     traits::event_store::EventStore,
     types::{
         event_read::EventRead, event_read_range::EventsReadRange, event_stream::EventStream,
@@ -210,6 +211,44 @@ async fn test_expected_version_exact_conflicts() {
         .append_event(stream_id, &ExpectedVersion::Exact(0), &event2)
         .await;
     assert!(result.is_err());
+
+    let err = result.unwrap_err();
+    let conflict = err
+        .downcast_ref::<ConcurrencyConflict>()
+        .expect("version mismatch should downcast to ConcurrencyConflict");
+    assert_eq!(conflict.stream_id, stream_id);
+    assert_eq!(conflict.expected, 0);
+    assert_eq!(conflict.actual, 1);
+}
+
+#[tokio::test]
+async fn test_append_event_exact_on_missing_stream_returns_typed_conflict() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    let stream_id = "missing_stream_conflict";
+
+    let event = EventWrite::<TestEvent, TestMetadata> {
+        id: Uuid::new_v4(),
+        correlation_id: None,
+        causation_id: None,
+        data: TestEvent {
+            user_id: "user1".to_string(),
+            action: "create".to_string(),
+            amount: None,
+        },
+        metadata: None,
+        name: "CreateEvent".to_string(),
+    };
+
+    let err = store
+        .append_event(stream_id, &ExpectedVersion::Exact(3), &event)
+        .await
+        .unwrap_err();
+    let conflict = err
+        .downcast_ref::<ConcurrencyConflict>()
+        .expect("Exact-on-missing-stream should downcast to ConcurrencyConflict");
+    assert_eq!(conflict.stream_id, stream_id);
+    assert_eq!(conflict.expected, 3);
+    assert_eq!(conflict.actual, 0);
 }
 
 #[tokio::test]
@@ -1147,6 +1186,48 @@ async fn test_get_streams_version_filters() {
     .await
     .unwrap();
     assert!(between.iter().all(|s| s.last_version <= 1));
+}
+
+#[tokio::test]
+async fn test_get_streams_id_prefix_filter() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+
+    for id in ["patient-1", "patient-2", "order-1", "order-2"] {
+        let event = EventWrite::<TestEvent, TestMetadata> {
+            id: Uuid::new_v4(),
+            correlation_id: None,
+            causation_id: None,
+            data: TestEvent {
+                user_id: id.to_string(),
+                action: "create".to_string(),
+                amount: None,
+            },
+            metadata: None,
+            name: "CreateEvent".to_string(),
+        };
+        store
+            .append_event(id, &ExpectedVersion::NoStream, &event)
+            .await
+            .unwrap();
+    }
+
+    let patients = EventStore::<TestEvent, TestMetadata>::get_streams(
+        &store,
+        &StreamsReadFilter::IdPrefix("patient-".to_string()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(patients.len(), 2);
+    assert!(patients.iter().all(|s| s.id.starts_with("patient-")));
+
+    let none = EventStore::<TestEvent, TestMetadata>::get_streams(
+        &store,
+        &StreamsReadFilter::IdPrefix("nonexistent-".to_string()),
+    )
+    .await
+    .unwrap();
+    assert!(none.is_empty());
 }
 
 #[tokio::test]

@@ -1,9 +1,11 @@
 #![doc = include_str!("../README.md")]
 
+pub mod error;
 pub mod traits;
 pub mod types;
 
 // Re-exports for ergonomic imports
+pub use error::ConcurrencyConflict;
 pub use traits::aggregate::{
     Aggregate, load_state_and_expected_version, make_handler, next_expected_version, rehydrate,
 };
