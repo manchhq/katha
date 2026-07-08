@@ -1,2 +1,5 @@
 /target
 /lcov.info
+
+# Superpowers (local skills/harness dir, not checked in)
+.superpowers/
