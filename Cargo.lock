@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "katha"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "katha-macros"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "katha",
  "proc-macro2",
@@ -702,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "katha-sqlx"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
