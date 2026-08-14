@@ -519,3 +519,91 @@ async fn command_cursor_pagination() {
         assert!(empty.items.is_empty(), "[{backend}] stale cursor empty");
     }
 }
+
+#[tokio::test]
+async fn multi_stream_reads_and_paging() {
+    for (backend, store) in event_store_backends().await {
+        for n in 0..3 {
+            store
+                .append_events(
+                    &format!("tenant_a:e{n}"),
+                    &ExpectedVersion::NoStream,
+                    vec![event("Created", None), event("Updated", None)],
+                )
+                .await
+                .unwrap_or_else(|e| panic!("append failed on {backend}: {e:?}"));
+        }
+        store
+            .append_events(
+                "tenant_b:e0",
+                &ExpectedVersion::NoStream,
+                vec![event("Created", None)],
+            )
+            .await
+            .unwrap();
+
+        let scoped: Vec<EventRead<TestEvent, TestMeta>> = store
+            .get_events_for_streams(
+                &StreamsReadFilter::IdPrefix("tenant_a:".to_string()),
+                &EventsReadRange::AllEvents,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("get_events_for_streams failed on {backend}: {e:?}"));
+
+        assert_eq!(scoped.len(), 6, "{backend}: three streams of two events");
+        assert!(
+            scoped.iter().all(|e| e.stream_id.starts_with("tenant_a:")),
+            "{backend}: leaked another prefix's events"
+        );
+
+        let ranged: Vec<EventRead<TestEvent, TestMeta>> = store
+            .get_events_for_streams(
+                &StreamsReadFilter::IdPrefix("tenant_a:".to_string()),
+                &EventsReadRange::FromVersion(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ranged.len(),
+            3,
+            "{backend}: version range applies per stream"
+        );
+
+        let all: Vec<EventRead<TestEvent, TestMeta>> = store
+            .get_events_for_streams(&StreamsReadFilter::AllStreams, &EventsReadRange::AllEvents)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 7, "{backend}: AllStreams sees every event");
+
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = store
+                .get_events_for_streams_page::<TestEvent, TestMeta>(
+                    &StreamsReadFilter::AllStreams,
+                    &EventsReadRange::AllEvents,
+                    cursor.as_ref(),
+                    2,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("paged read failed on {backend}: {e:?}"));
+
+            assert!(page.items.len() <= 2, "{backend}: page exceeded its limit");
+            seen.extend(page.items.iter().map(|e| e.id));
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+
+        seen.sort();
+        let before_dedup = seen.len();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            before_dedup,
+            "{backend}: paging returned a duplicate"
+        );
+        assert_eq!(seen.len(), 7, "{backend}: paging dropped events");
+    }
+}

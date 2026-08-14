@@ -1240,3 +1240,334 @@ async fn test_get_events_page_empty_stream() {
     assert!(page.items.is_empty());
     assert!(page.next_cursor.is_none());
 }
+
+#[tokio::test]
+async fn test_event_appended_delivers_batch_in_version_order_with_full_fidelity() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    let mut rx = EventStore::<TestEvent, TestMetadata>::event_appended(&store)
+        .expect("sqlx store should expose event_appended observable");
+
+    let writes: Vec<EventWrite<TestEvent, TestMetadata>> = (0..5)
+        .map(|i| EventWrite::<TestEvent, TestMetadata> {
+            id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            causation_id: Some(Uuid::new_v4()),
+            data: TestEvent {
+                user_id: format!("user-{i}"),
+                action: format!("action-{i}"),
+                amount: Some(i * 10),
+            },
+            metadata: Some(TestMetadata {
+                source: format!("source-{i}"),
+                timestamp: Utc::now().to_rfc3339(),
+            }),
+            name: format!("BatchEvent{i}"),
+        })
+        .collect();
+
+    store
+        .append_events("batch_stream", &ExpectedVersion::NoStream, writes.clone())
+        .await
+        .unwrap();
+
+    for (index, write) in writes.iter().enumerate() {
+        let appended = timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("timed out waiting for typed appended event")
+            .expect("typed appended channel unexpectedly closed");
+
+        assert_eq!(
+            appended.version, index as u32,
+            "events must arrive in order"
+        );
+        assert_eq!(appended.id, write.id);
+        assert_eq!(appended.correlation_id, write.correlation_id);
+        assert_eq!(appended.causation_id, write.causation_id);
+        assert_eq!(appended.stream_id, "batch_stream");
+        assert_eq!(appended.name, write.name);
+        assert_eq!(appended.data, write.data);
+        assert_eq!(appended.metadata, write.metadata);
+    }
+}
+
+#[tokio::test]
+async fn test_event_appended_delivers_events_without_optional_fields() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    let mut rx = EventStore::<TestEvent, TestMetadata>::event_appended(&store)
+        .expect("sqlx store should expose event_appended observable");
+
+    let write = EventWrite::<TestEvent, TestMetadata> {
+        id: Uuid::new_v4(),
+        correlation_id: None,
+        causation_id: None,
+        data: TestEvent {
+            user_id: "bare".to_string(),
+            action: "no-optionals".to_string(),
+            amount: None,
+        },
+        metadata: None,
+        name: "BareEvent".to_string(),
+    };
+
+    store
+        .append_event("bare_stream", &ExpectedVersion::NoStream, &write)
+        .await
+        .unwrap();
+
+    let appended = timeout(Duration::from_millis(500), rx.recv())
+        .await
+        .expect("timed out waiting for typed appended event")
+        .expect("typed appended channel unexpectedly closed");
+
+    assert_eq!(appended.id, write.id);
+    assert_eq!(appended.correlation_id, None);
+    assert_eq!(appended.causation_id, None);
+    assert_eq!(appended.metadata, None);
+    assert_eq!(appended.data, write.data);
+}
+
+#[tokio::test]
+async fn test_reset_projection_clears_only_its_own_markers() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    store.ensure_projection_idempotency_table().await.unwrap();
+
+    let owned: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+    let other = Uuid::new_v4();
+    for id in &owned {
+        store.try_mark_event_processed("matters", id).await.unwrap();
+    }
+    store
+        .try_mark_event_processed("audit", &other)
+        .await
+        .unwrap();
+
+    let cleared = store.reset_projection("matters").await.unwrap();
+
+    assert_eq!(cleared, 3, "should report how many markers it removed");
+    for id in &owned {
+        assert!(
+            !store.is_event_processed("matters", id).await.unwrap(),
+            "marker should be gone after reset"
+        );
+    }
+    assert!(
+        store.is_event_processed("audit", &other).await.unwrap(),
+        "another projection's markers must survive"
+    );
+}
+
+#[tokio::test]
+async fn test_reset_projection_on_unknown_name_clears_nothing() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    store.ensure_projection_idempotency_table().await.unwrap();
+
+    let cleared = store.reset_projection("never_ran").await.unwrap();
+
+    assert_eq!(cleared, 0);
+}
+
+#[tokio::test]
+async fn test_reset_projection_lets_a_rebuild_reapply_every_event() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    store.ensure_projection_idempotency_table().await.unwrap();
+
+    let writes: Vec<EventWrite<TestEvent, TestMetadata>> = (0..3)
+        .map(|i| EventWrite::<TestEvent, TestMetadata> {
+            id: Uuid::new_v4(),
+            correlation_id: None,
+            causation_id: None,
+            data: TestEvent {
+                user_id: format!("user-{i}"),
+                action: "rebuild".to_string(),
+                amount: None,
+            },
+            metadata: None,
+            name: "RebuildEvent".to_string(),
+        })
+        .collect();
+
+    let appended = store
+        .append_events("rebuild_stream", &ExpectedVersion::NoStream, writes)
+        .await
+        .unwrap();
+
+    let applied = Arc::new(AtomicUsize::new(0));
+    let run_projection = || async {
+        for event in &appended {
+            store
+                .apply_projection_once("read_model", event, |_| {
+                    let applied = Arc::clone(&applied);
+                    async move {
+                        applied.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                })
+                .await
+                .unwrap();
+        }
+    };
+
+    run_projection().await;
+    assert_eq!(applied.load(Ordering::SeqCst), 3, "first pass applies all");
+
+    run_projection().await;
+    assert_eq!(
+        applied.load(Ordering::SeqCst),
+        3,
+        "second pass is correctly skipped by the markers"
+    );
+
+    store.reset_projection("read_model").await.unwrap();
+    run_projection().await;
+
+    assert_eq!(
+        applied.load(Ordering::SeqCst),
+        6,
+        "after reset, a rebuild must reapply every event"
+    );
+}
+
+async fn seed_stream(store: &SqlxEventStore, stream_id: &str, count: usize) -> Vec<Uuid> {
+    let writes: Vec<EventWrite<TestEvent, TestMetadata>> = (0..count)
+        .map(|i| EventWrite::<TestEvent, TestMetadata> {
+            id: Uuid::new_v4(),
+            correlation_id: None,
+            causation_id: None,
+            data: TestEvent {
+                user_id: stream_id.to_string(),
+                action: format!("act-{i}"),
+                amount: Some(i as i32),
+            },
+            metadata: None,
+            name: "SeedEvent".to_string(),
+        })
+        .collect();
+
+    store
+        .append_events(stream_id, &ExpectedVersion::NoStream, writes)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e: EventRead<TestEvent, TestMetadata>| e.id)
+        .collect()
+}
+
+fn assert_ordered_by_time_then_id(events: &[EventRead<TestEvent, TestMetadata>]) {
+    for pair in events.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        assert!(
+            (a.created_utc, a.id) <= (b.created_utc, b.id),
+            "events must be ordered by (created_utc, id): {:?} then {:?}",
+            (a.created_utc, a.id),
+            (b.created_utc, b.id)
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_get_events_for_streams_returns_only_matching_streams() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+
+    let mut wanted = Vec::new();
+    for n in 0..3 {
+        wanted.extend(seed_stream(&store, &format!("tenant_a:entity-{n}"), 2).await);
+    }
+    let unwanted = seed_stream(&store, "tenant_b:entity-0", 2).await;
+
+    let events: Vec<EventRead<TestEvent, TestMetadata>> = store
+        .get_events_for_streams(
+            &StreamsReadFilter::IdPrefix("tenant_a:".to_string()),
+            &EventsReadRange::AllEvents,
+        )
+        .await
+        .unwrap();
+
+    let got: Vec<Uuid> = events.iter().map(|e| e.id).collect();
+    assert_eq!(got.len(), 6, "three streams of two events each");
+    for id in &wanted {
+        assert!(got.contains(id), "missing an event from a matching stream");
+    }
+    for id in &unwanted {
+        assert!(
+            !got.contains(id),
+            "leaked an event from a non-matching stream"
+        );
+    }
+    assert_ordered_by_time_then_id(&events);
+}
+
+#[tokio::test]
+async fn test_get_events_for_streams_applies_the_version_range_per_stream() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+
+    seed_stream(&store, "ranged:one", 4).await;
+    seed_stream(&store, "ranged:two", 4).await;
+
+    let events: Vec<EventRead<TestEvent, TestMetadata>> = store
+        .get_events_for_streams(
+            &StreamsReadFilter::IdPrefix("ranged:".to_string()),
+            &EventsReadRange::FromVersion(2),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(events.len(), 4, "versions 2 and 3 from each of two streams");
+    assert!(
+        events.iter().all(|e| e.version >= 2),
+        "range must be applied per stream, not globally"
+    );
+}
+
+#[tokio::test]
+async fn test_get_events_for_streams_all_streams_returns_every_event() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+
+    seed_stream(&store, "alpha", 3).await;
+    seed_stream(&store, "beta", 2).await;
+
+    let events: Vec<EventRead<TestEvent, TestMetadata>> = store
+        .get_events_for_streams(&StreamsReadFilter::AllStreams, &EventsReadRange::AllEvents)
+        .await
+        .unwrap();
+
+    assert_eq!(events.len(), 5);
+    assert_ordered_by_time_then_id(&events);
+}
+
+#[tokio::test]
+async fn test_get_events_for_streams_page_walks_every_event_exactly_once() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+
+    let mut expected = Vec::new();
+    for n in 0..4 {
+        expected.extend(seed_stream(&store, &format!("paged:entity-{n}"), 3).await);
+    }
+
+    let mut seen: Vec<Uuid> = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page: katha_sqlx::EventStreamsCursorPage<TestEvent, TestMetadata> = store
+            .get_events_for_streams_page(
+                &StreamsReadFilter::IdPrefix("paged:".to_string()),
+                &EventsReadRange::AllEvents,
+                cursor.as_ref(),
+                5,
+            )
+            .await
+            .unwrap();
+
+        assert!(page.items.len() <= 5, "page must respect the limit");
+        assert_ordered_by_time_then_id(&page.items);
+        seen.extend(page.items.iter().map(|e| e.id));
+
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+
+    assert_eq!(seen.len(), 12, "12 events across 4 streams, no duplicates");
+    for id in &expected {
+        assert!(seen.contains(id), "pagination dropped an event");
+    }
+}

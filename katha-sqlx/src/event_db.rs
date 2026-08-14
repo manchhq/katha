@@ -28,6 +28,18 @@ where
     type Error = DbConversionError;
 
     fn try_from(event_read_db: EventReadDb) -> Result<Self, Self::Error> {
+        Self::try_from(&event_read_db)
+    }
+}
+
+impl<Payload, Meta> TryFrom<&EventReadDb> for EventRead<Payload, Meta>
+where
+    Payload: for<'de> Deserialize<'de>,
+    Meta: for<'de> Deserialize<'de>,
+{
+    type Error = DbConversionError;
+
+    fn try_from(event_read_db: &EventReadDb) -> Result<Self, Self::Error> {
         let id = Uuid::parse_str(&event_read_db.id).map_err(|e| DbConversionError::UuidParse {
             field: "id".to_string(),
             value: event_read_db.id.clone(),
@@ -83,9 +95,9 @@ where
             id,
             correlation_id,
             causation_id,
-            stream_id: event_read_db.stream_id,
+            stream_id: event_read_db.stream_id.clone(),
             version: event_read_db.version as u32,
-            name: event_read_db.name,
+            name: event_read_db.name.clone(),
             data,
             metadata,
             created_utc,
@@ -150,5 +162,71 @@ impl TryFrom<StreamsDb> for EventStream {
             last_version: streams_db.last_version as u32,
             last_updated_utc,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventReadDb;
+    use katha::types::event_read::EventRead;
+    use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct Payload {
+        action: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct Meta {
+        source: String,
+    }
+
+    fn sample_row(id: Uuid, correlation_id: Uuid) -> EventReadDb {
+        EventReadDb {
+            id: id.to_string(),
+            correlation_id: Some(correlation_id.to_string()),
+            causation_id: None,
+            stream_id: "stream-1".to_string(),
+            version: 7,
+            name: "Sampled".to_string(),
+            data: r#"{"action":"deposit"}"#.to_string(),
+            metadata: Some(r#"{"source":"unit-test"}"#.to_string()),
+            created_utc: "2026-08-14T10:11:12+00:00".to_string(),
+        }
+    }
+
+    #[test]
+    fn converts_borrowed_row_into_typed_event() {
+        let id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let row = sample_row(id, correlation_id);
+
+        let event: EventRead<Payload, Meta> = EventRead::try_from(&row).expect("conversion failed");
+
+        assert_eq!(event.id, id);
+        assert_eq!(event.correlation_id, Some(correlation_id));
+        assert_eq!(event.causation_id, None);
+        assert_eq!(event.stream_id, "stream-1");
+        assert_eq!(event.version, 7);
+        assert_eq!(event.name, "Sampled");
+        assert_eq!(event.data.action, "deposit");
+        assert_eq!(
+            event.metadata.expect("metadata expected").source,
+            "unit-test"
+        );
+        assert_eq!(event.created_utc.to_rfc3339(), "2026-08-14T10:11:12+00:00");
+    }
+
+    #[test]
+    fn borrowed_row_conversion_leaves_row_reusable() {
+        let row = sample_row(Uuid::new_v4(), Uuid::new_v4());
+
+        let first: EventRead<Payload, Meta> = EventRead::try_from(&row).expect("first conversion");
+        let second: EventRead<Payload, Meta> =
+            EventRead::try_from(&row).expect("second conversion");
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.data, second.data);
     }
 }
