@@ -40,4 +40,4 @@ release-dry level:
 
 # Cut a release: bump shared version, commit, tag vX.Y.Z, push. CI publishes to crates.io.
 release level:
-    cargo release {{level}} --workspace --execute
+    cargo release {{level}} --workspace --execute --no-confirm
