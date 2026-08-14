@@ -1,7 +1,11 @@
 #![allow(dead_code)]
 use katha::traits::command_store::CommandStore;
 use katha::traits::event_store::EventStore;
+use katha::types::event_read::EventRead;
+use katha::types::event_read_range::EventsReadRange;
+use katha::types::stream_read_filter::StreamsReadFilter;
 use katha_sqlx::{SqlxCommandStore, SqlxEventStore};
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
@@ -118,4 +122,36 @@ pub async fn create_and_setup_local_command_store(db_path: &str) -> SqlxCommandS
         .await
         .unwrap();
     store
+}
+
+/// Walks every page of a cross-stream read and returns the events in delivery
+/// order, asserting each page honours `limit`.
+///
+/// Shared so the per-backend and SQLite-only pagination tests do not each carry
+/// their own loop.
+pub async fn drain_event_pages<Payload, Meta>(
+    store: &SqlxEventStore,
+    filter: &StreamsReadFilter,
+    range: &EventsReadRange,
+    limit: usize,
+) -> Vec<EventRead<Payload, Meta>>
+where
+    Payload: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
+    Meta: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
+{
+    let mut collected = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = store
+            .get_events_for_streams_page::<Payload, Meta>(filter, range, cursor.as_ref(), limit)
+            .await
+            .expect("paged cross-stream read failed");
+        assert!(page.items.len() <= limit, "page exceeded its limit");
+        collected.extend(page.items);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    collected
 }

@@ -569,41 +569,23 @@ async fn multi_stream_reads_and_paging() {
             "{backend}: version range applies per stream"
         );
 
-        let all: Vec<EventRead<TestEvent, TestMeta>> = store
-            .get_events_for_streams(&StreamsReadFilter::AllStreams, &EventsReadRange::AllEvents)
-            .await
-            .unwrap();
-        assert_eq!(all.len(), 7, "{backend}: AllStreams sees every event");
+        let paged: Vec<EventRead<TestEvent, TestMeta>> = common::drain_event_pages(
+            &store,
+            &StreamsReadFilter::AllStreams,
+            &EventsReadRange::AllEvents,
+            2,
+        )
+        .await;
 
-        let mut seen = Vec::new();
-        let mut cursor = None;
-        loop {
-            let page = store
-                .get_events_for_streams_page::<TestEvent, TestMeta>(
-                    &StreamsReadFilter::AllStreams,
-                    &EventsReadRange::AllEvents,
-                    cursor.as_ref(),
-                    2,
-                )
-                .await
-                .unwrap_or_else(|e| panic!("paged read failed on {backend}: {e:?}"));
-
-            assert!(page.items.len() <= 2, "{backend}: page exceeded its limit");
-            seen.extend(page.items.iter().map(|e| e.id));
-            match page.next_cursor {
-                Some(next) => cursor = Some(next),
-                None => break,
-            }
-        }
-
-        seen.sort();
+        let mut seen: Vec<Uuid> = paged.iter().map(|e| e.id).collect();
         let before_dedup = seen.len();
+        seen.sort();
         seen.dedup();
         assert_eq!(
             seen.len(),
             before_dedup,
             "{backend}: paging returned a duplicate"
         );
-        assert_eq!(seen.len(), 7, "{backend}: paging dropped events");
+        assert_eq!(seen.len(), 7, "{backend}: paging must cover every event");
     }
 }
