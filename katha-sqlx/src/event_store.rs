@@ -3,7 +3,7 @@ use crate::{
     backend::Backend,
     error::DbConversionError,
     event_db::{EventReadDb, StreamsDb},
-    pagination::EventCursorPage,
+    pagination::{EventCursor, EventCursorPage, EventStreamsCursorPage},
     validate::validate_store_name,
 };
 use anyhow::Result;
@@ -27,6 +27,27 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+/// A bind value produced by [`SqlxEventStore::streams_filter_sql`].
+///
+/// Stream filters bind either text or integers, so the rendered condition and
+/// its values have to travel together to stay in placeholder order.
+enum FilterBind {
+    Text(String),
+    Int(i64),
+}
+
+impl FilterBind {
+    fn apply<'q, R>(
+        self,
+        query: sqlx::query::QueryAs<'q, Any, R, sqlx::any::AnyArguments<'q>>,
+    ) -> sqlx::query::QueryAs<'q, Any, R, sqlx::any::AnyArguments<'q>> {
+        match self {
+            FilterBind::Text(value) => query.bind(value),
+            FilterBind::Int(value) => query.bind(value),
+        }
+    }
+}
 
 impl SqlxEventStore {
     /// Creates an event store backed by an in-memory SQLite database.
@@ -144,17 +165,32 @@ impl SqlxEventStore {
     }
 
     /// Ensures stream and event tables exist by running the event migration file.
-    async fn ensure_event_tables(&self) -> Result<()> {
-        let template = include_str!("../migrations/0001_events.sql");
-        let sql = template.replace("{{name}}", &self.name);
+    /// The event migrations to run, in order, for `backend`.
+    ///
+    /// Postgres additionally gets a `text_pattern_ops` index so `IdPrefix`
+    /// filters can use an index under a non-C collation; that syntax does not
+    /// exist in SQLite, which is why the list is backend-dependent.
+    fn event_migrations(backend: Backend) -> Vec<&'static str> {
+        let mut migrations = vec![include_str!("../migrations/0001_events.sql")];
+        if backend == Backend::Postgres {
+            migrations.push(include_str!(
+                "../migrations/0002_events_streams_id_prefix_index.sql"
+            ));
+        }
+        migrations
+    }
 
+    async fn ensure_event_tables(&self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        for statement in sql.split(';') {
-            let stmt = statement.trim();
-            if stmt.is_empty() {
-                continue;
+        for template in Self::event_migrations(self.backend) {
+            let sql = template.replace("{{name}}", &self.name);
+            for statement in sql.split(';') {
+                let stmt = statement.trim();
+                if stmt.is_empty() {
+                    continue;
+                }
+                tx.execute(stmt).await?;
             }
-            tx.execute(stmt).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -218,6 +254,42 @@ impl SqlxEventStore {
         .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Clears every processed-marker for `projection_name`, returning how many
+    /// were removed.
+    ///
+    /// This is the counterpart to
+    /// [`apply_projection_once`](Self::apply_projection_once). Rebuilding a read
+    /// model by replaying the log requires clearing the markers **first** —
+    /// otherwise every `apply_projection_once` call returns `Ok(false)` for
+    /// events the previous run already marked, and the rebuild silently produces
+    /// an empty read model with no error.
+    ///
+    /// The correct order is always reset, then replay:
+    ///
+    /// ```ignore
+    /// store.reset_projection("matters").await?;
+    /// for event in store.get_events(stream, &EventsReadRange::AllEvents).await? {
+    ///     store.apply_projection_once("matters", &event, |e| apply(e)).await?;
+    /// }
+    /// ```
+    ///
+    /// Only markers for the named projection are removed; other projections are
+    /// untouched.
+    pub async fn reset_projection(&self, projection_name: &str) -> Result<u64> {
+        let result = sqlx::query(&self.backend.bind(&format!(
+            r#"
+            DELETE FROM "{}_projection_processed"
+            WHERE projection_name = ?
+            "#,
+            self.name
+        )))
+        .bind(projection_name)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     /// Returns whether a projection has already processed a given event.
@@ -551,6 +623,199 @@ impl SqlxEventStore {
         })
     }
 
+    /// Renders a [`StreamsReadFilter`] as a SQL condition over `alias` plus its
+    /// ordered bind values.
+    ///
+    /// Shared by `get_streams` and the cross-stream event reads so the two can
+    /// never drift on what a filter means.
+    fn streams_filter_sql(filter: &StreamsReadFilter, alias: &str) -> (String, Vec<FilterBind>) {
+        match filter {
+            StreamsReadFilter::AllStreams => ("1 = 1".to_string(), vec![]),
+            StreamsReadFilter::IdPrefix(prefix) => (
+                format!("{alias}.id LIKE ?"),
+                vec![FilterBind::Text(format!("{prefix}%"))],
+            ),
+            StreamsReadFilter::BeforeVersion(version) => (
+                format!("{alias}.last_version < ?"),
+                vec![FilterBind::Int(i64::from(*version))],
+            ),
+            StreamsReadFilter::AfterVersion(version) => (
+                format!("{alias}.last_version > ?"),
+                vec![FilterBind::Int(i64::from(*version))],
+            ),
+            StreamsReadFilter::BetweenVersions(start, end) => (
+                format!("{alias}.last_version >= ? AND {alias}.last_version <= ?"),
+                vec![
+                    FilterBind::Int(i64::from(*start)),
+                    FilterBind::Int(i64::from(*end)),
+                ],
+            ),
+            StreamsReadFilter::BeforeTime(time) => (
+                format!("{alias}.last_updated_utc < ?"),
+                vec![FilterBind::Text(time.to_rfc3339())],
+            ),
+            StreamsReadFilter::AfterTime(time) => (
+                format!("{alias}.last_updated_utc > ?"),
+                vec![FilterBind::Text(time.to_rfc3339())],
+            ),
+            StreamsReadFilter::BetweenTimes(start, end) => (
+                format!("{alias}.last_updated_utc >= ? AND {alias}.last_updated_utc <= ?"),
+                vec![
+                    FilterBind::Text(start.to_rfc3339()),
+                    FilterBind::Text(end.to_rfc3339()),
+                ],
+            ),
+        }
+    }
+
+    /// Resolves an [`EventsReadRange`] to an inclusive `(start, end)` version pair.
+    fn version_bounds(range: &EventsReadRange) -> (u32, u32) {
+        match range {
+            EventsReadRange::AllEvents => (0, u32::MAX),
+            EventsReadRange::FromVersion(start) => (*start, u32::MAX),
+            EventsReadRange::ToVersion(end) => (0, *end),
+            EventsReadRange::VersionRange {
+                from_version,
+                to_version,
+            } => (*from_version, *to_version),
+        }
+    }
+
+    /// Reads events across every stream matching `filter`, in one query.
+    ///
+    /// This is the multi-stream counterpart to
+    /// [`get_events`](katha::traits::event_store::EventStore::get_events). Rebuilding a read
+    /// model over many streams with `get_streams` followed by a `get_events` per
+    /// stream is one round-trip per stream; this is one round-trip total.
+    ///
+    /// `range` is applied **per stream**, not globally: `FromVersion(2)` means
+    /// version 2 onwards within each matching stream.
+    ///
+    /// # Ordering
+    ///
+    /// Events come back ordered by `(created_utc, id)`. That is **wall-clock
+    /// order, not causal order**. Across streams, two events written in the same
+    /// instant tie-break on id, so an `Updated` for one aggregate can precede a
+    /// `Created` for another. Projections that apply idempotent upserts are
+    /// unaffected; projections that denormalise across aggregates at write time
+    /// are not, and should key off the per-stream `version` instead.
+    ///
+    /// For large histories prefer
+    /// [`get_events_for_streams_page`](Self::get_events_for_streams_page), which
+    /// bounds memory.
+    pub async fn get_events_for_streams<Payload, Meta>(
+        &self,
+        filter: &StreamsReadFilter,
+        range: &EventsReadRange,
+    ) -> Result<Vec<EventRead<Payload, Meta>>>
+    where
+        Payload: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
+        Meta: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        let (condition, filter_binds) = Self::streams_filter_sql(filter, "s");
+        let (start_version, end_version) = Self::version_bounds(range);
+
+        let sql = self.backend.bind(&format!(
+            r#"SELECT e.id, e.correlation_id, e.causation_id, e.stream_id,
+            e.version, e.name, e.data, e.metadata, e.created_utc
+            FROM "{name}_events" e
+            JOIN "{name}_streams" s ON s.id = e.stream_id
+            WHERE {condition} AND e.version >= ? AND e.version <= ?
+            ORDER BY e.created_utc ASC, e.id ASC"#,
+            name = self.name
+        ));
+
+        let mut query = sqlx::query_as::<_, EventReadDb>(&sql);
+        for bind in filter_binds {
+            query = bind.apply(query);
+        }
+        let rows = query
+            .bind(i64::from(start_version))
+            .bind(i64::from(end_version))
+            .fetch_all(&self.pool)
+            .await?;
+
+        rows.into_iter()
+            .map(EventRead::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e: DbConversionError| anyhow::anyhow!(e))
+    }
+
+    /// Memory-bounded [`get_events_for_streams`](Self::get_events_for_streams).
+    ///
+    /// Pages forward on the same `(created_utc, id)` keyset the results are
+    /// ordered by. Pass `None` to start; feed `next_cursor` back until it is
+    /// `None`.
+    ///
+    /// The ordering caveat on
+    /// [`get_events_for_streams`](Self::get_events_for_streams) applies here too.
+    pub async fn get_events_for_streams_page<Payload, Meta>(
+        &self,
+        filter: &StreamsReadFilter,
+        range: &EventsReadRange,
+        cursor: Option<&EventCursor>,
+        limit: usize,
+    ) -> Result<EventStreamsCursorPage<Payload, Meta>>
+    where
+        Payload: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
+        Meta: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        let (condition, filter_binds) = Self::streams_filter_sql(filter, "s");
+        let (start_version, end_version) = Self::version_bounds(range);
+        let fetch_limit = (limit.max(1) + 1) as i64;
+
+        let keyset = if cursor.is_some() {
+            " AND (e.created_utc, e.id) > (?, ?)"
+        } else {
+            ""
+        };
+
+        let sql = self.backend.bind(&format!(
+            r#"SELECT e.id, e.correlation_id, e.causation_id, e.stream_id,
+            e.version, e.name, e.data, e.metadata, e.created_utc
+            FROM "{name}_events" e
+            JOIN "{name}_streams" s ON s.id = e.stream_id
+            WHERE {condition} AND e.version >= ? AND e.version <= ?{keyset}
+            ORDER BY e.created_utc ASC, e.id ASC
+            LIMIT ?"#,
+            name = self.name
+        ));
+
+        let mut query = sqlx::query_as::<_, EventReadDb>(&sql);
+        for bind in filter_binds {
+            query = bind.apply(query);
+        }
+        query = query
+            .bind(i64::from(start_version))
+            .bind(i64::from(end_version));
+        if let Some(cursor) = cursor {
+            query = query
+                .bind(cursor.created_utc.to_rfc3339())
+                .bind(cursor.id.to_string());
+        }
+
+        let rows = query.bind(fetch_limit).fetch_all(&self.pool).await?;
+
+        let has_more = rows.len() > limit.max(1);
+        let items: Vec<EventRead<Payload, Meta>> = rows
+            .into_iter()
+            .take(limit.max(1))
+            .map(EventRead::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e: DbConversionError| anyhow::anyhow!(e))?;
+
+        let next_cursor = if has_more {
+            items.last().map(|event| EventCursor {
+                created_utc: event.created_utc,
+                id: event.id,
+            })
+        } else {
+            None
+        };
+
+        Ok(EventStreamsCursorPage { items, next_cursor })
+    }
+
     /// Builds a compact append notification for projection subscribers.
     fn build_notification<Payload, Meta>(
         store_name: &str,
@@ -733,65 +998,19 @@ where
     }
 
     async fn get_streams(&self, filter: &StreamsReadFilter) -> Result<Vec<EventStream>> {
-        let rows = match filter {
-            StreamsReadFilter::AllStreams => sqlx::query_as::<_, StreamsDb>(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams""#,
-                self.name
-            ))
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::IdPrefix(prefix) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE id LIKE ?"#,
-                self.name
-            )))
-            .bind(format!("{prefix}%"))
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::BeforeVersion(version) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_version < ?"#,
-                self.name
-            )))
-            .bind(*version as i64)
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::AfterVersion(version) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_version > ?"#,
-                self.name
-            )))
-            .bind(*version as i64)
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::BetweenVersions(start, end) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_version >= ? AND last_version <= ?"#,
-                self.name
-            )))
-            .bind(*start as i64)
-            .bind(*end as i64)
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::BeforeTime(time) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_updated_utc < ?"#,
-                self.name
-            )))
-            .bind(time.to_rfc3339())
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::AfterTime(time) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_updated_utc > ?"#,
-                self.name
-            )))
-            .bind(time.to_rfc3339())
-            .fetch_all(&self.pool)
-            .await?,
-            StreamsReadFilter::BetweenTimes(start, end) => sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
-                r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE last_updated_utc >= ? AND last_updated_utc <= ?"#,
-                self.name
-            )))
-            .bind(start.to_rfc3339())
-            .bind(end.to_rfc3339())
-            .fetch_all(&self.pool)
-            .await?,
-        };
+        let (condition, binds) = Self::streams_filter_sql(filter, "s");
+
+        let sql = self.backend.bind(&format!(
+            r#"SELECT s.id, s.last_version, s.last_updated_utc
+            FROM "{}_streams" s WHERE {condition}"#,
+            self.name
+        ));
+
+        let mut query = sqlx::query_as::<_, StreamsDb>(&sql);
+        for bind in binds {
+            query = bind.apply(query);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
 
         rows.into_iter()
             .map(EventStream::try_from)
@@ -813,6 +1032,48 @@ where
                 EventStream::try_from(stream_db).map_err(|e: DbConversionError| anyhow::anyhow!(e))
             }
             None => Err(anyhow::anyhow!("Stream not found")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_gets_the_prefix_pattern_index() {
+        let migrations = SqlxEventStore::event_migrations(Backend::Postgres);
+
+        assert!(
+            migrations
+                .iter()
+                .any(|sql| sql.contains("text_pattern_ops")),
+            "Postgres needs text_pattern_ops or IdPrefix LIKE cannot use an index"
+        );
+    }
+
+    #[test]
+    fn sqlite_never_sees_postgres_only_syntax() {
+        let migrations = SqlxEventStore::event_migrations(Backend::Sqlite);
+
+        assert!(
+            !migrations
+                .iter()
+                .any(|sql| sql.contains("text_pattern_ops")),
+            "text_pattern_ops is not valid SQLite and would fail the migration"
+        );
+    }
+
+    #[test]
+    fn both_backends_create_the_base_tables() {
+        for backend in [Backend::Sqlite, Backend::Postgres] {
+            let migrations = SqlxEventStore::event_migrations(backend);
+            assert!(
+                migrations
+                    .iter()
+                    .any(|sql| sql.contains("{{name}}_streams")),
+                "{backend:?} must still create the base tables"
+            );
         }
     }
 }

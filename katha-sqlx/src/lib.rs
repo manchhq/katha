@@ -13,6 +13,8 @@ mod types;
 mod validate;
 
 pub use notifications::{DEFAULT_NOTIFICATION_BUFFER, EventNotification};
-pub use pagination::{CommandCursor, CommandCursorPage, EventCursorPage};
+pub use pagination::{
+    CommandCursor, CommandCursorPage, EventCursor, EventCursorPage, EventStreamsCursorPage,
+};
 pub use projection_runner::ProjectionRunStats;
 pub use types::{SqlxCommandStore, SqlxEventStore};
