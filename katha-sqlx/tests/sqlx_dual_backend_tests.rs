@@ -623,3 +623,40 @@ async fn payload_index_is_opt_in_and_backend_aware() {
         assert_eq!(read.len(), 1, "{backend}: appends still round-trip");
     }
 }
+
+#[tokio::test]
+async fn payload_validation_is_opt_in_and_backend_aware() {
+    for (backend, store) in event_store_backends().await {
+        let applied = store
+            .ensure_payload_validation()
+            .await
+            .unwrap_or_else(|e| panic!("ensure_payload_validation failed on {backend}: {e:?}"));
+
+        assert_eq!(
+            applied,
+            backend == "postgres",
+            "{backend}: only Postgres has a payload check to apply"
+        );
+
+        let again = store
+            .ensure_payload_validation()
+            .await
+            .unwrap_or_else(|e| panic!("second call failed on {backend}: {e:?}"));
+        assert_eq!(again, applied, "{backend}: must be idempotent");
+
+        store
+            .append_events(
+                "checked:e0",
+                &ExpectedVersion::NoStream,
+                vec![event("Created", None)],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("append under the check failed on {backend}: {e:?}"));
+
+        let read: Vec<EventRead<TestEvent, TestMeta>> = store
+            .get_events("checked:e0", &EventsReadRange::AllEvents)
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 1, "{backend}: valid payloads still append");
+    }
+}

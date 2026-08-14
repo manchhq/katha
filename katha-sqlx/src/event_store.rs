@@ -238,16 +238,46 @@ impl SqlxEventStore {
         let template = include_str!("../migrations/0003_events_payload_gin_index.sql");
         let sql = template.replace("{{name}}", &self.name);
 
-        let mut tx = self.pool.begin().await?;
-        for statement in sql.split(';') {
-            let stmt = statement.trim();
-            if stmt.is_empty() {
-                continue;
-            }
-            tx.execute(stmt).await?;
-        }
-        tx.commit().await?;
+        self.pool.execute(sql.as_str()).await?;
         Ok(true)
+    }
+
+    /// Rejects appends whose payload is not valid JSON, at write time.
+    ///
+    /// **Opt-in**, and the cheap half of payload integrity: roughly 10% of
+    /// append throughput and no disk, against roughly 55% and an index for
+    /// [`ensure_payload_index`](Self::ensure_payload_index). Take this one for
+    /// the guarantee; take that one as well only if you also query payloads in
+    /// SQL.
+    ///
+    /// Returns `true` when a constraint was ensured and `false` on a backend
+    /// with no equivalent — today that means SQLite, where this is a no-op.
+    ///
+    /// `data` is `TEXT` holding `serde_json` output, so Postgres will store a
+    /// truncated or corrupted payload without complaint and the failure
+    /// surfaces later, at deserialize time, during a replay. This moves that
+    /// failure to the append that caused it.
+    ///
+    /// Note what it does and does not guard. Payloads written *through* this
+    /// crate are serialized by `serde_json` and are always well-formed, so this
+    /// protects against corruption arriving another way: direct SQL, a bad
+    /// restore, a replication artefact. Applying it **fails loudly** if any
+    /// existing row is already invalid, which is the point.
+    pub async fn ensure_payload_validation(&self) -> Result<bool> {
+        if self.backend != Backend::Postgres {
+            return Ok(false);
+        }
+
+        let template = include_str!("../migrations/0004_events_payload_json_check.sql");
+        let sql = template.replace("{{name}}", &self.name);
+
+        match self.pool.execute(sql.as_str()).await {
+            Ok(_) => Ok(true),
+            // Postgres has no ADD CONSTRAINT IF NOT EXISTS, so a repeat call
+            // reports that the constraint already exists. That is success.
+            Err(e) if e.to_string().contains("already exists") => Ok(true),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn ensure_event_tables(&self) -> Result<()> {
