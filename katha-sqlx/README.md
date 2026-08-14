@@ -75,6 +75,39 @@ performance. It supports containment (`@>`), not the key-existence operators.
 Applying either helper **fails loudly** if any existing row is not valid JSON,
 which is the intended outcome rather than something to smooth over.
 
+## Why events are their own table
+
+A recurring proposal is to drop the separate events table and hold a stream's
+events as a JSONB array on the stream row. Measured on Postgres, appending 2000
+events to one stream, one at a time:
+
+| | time | disk |
+|---|---|---|
+| separate events table (what katha does) | **56 ms** | 920 kB |
+| events as a JSONB array on the stream row | **1757 ms** | 7.7 MB |
+
+The cost is not constant either — it grows with the stream:
+
+| appends | time per 500 |
+|---|---|
+| 1–500 | 155 ms |
+| 501–1000 | 351 ms |
+| 1001–1500 | 612 ms |
+| 1501–2000 | 741 ms |
+
+Each append rewrites the whole row: read the array, append, write it back,
+re-TOAST it, leave a dead tuple behind. That is O(stream length) per append and
+quadratic over a stream's life, and the disk figure is the same effect showing
+up as bloat.
+
+There is a correctness reason as well, and it is the one that would bite
+quietly rather than slowly. The stream's current version is read *outside* the
+append transaction, so `ExpectedVersion` is read-then-write, not
+compare-and-swap: two concurrent writers both pass the version check, and
+`UNIQUE(stream_id, version)` is what rejects the loser. Holding events in an
+array removes that constraint and turns a clean concurrency error into row-lock
+contention.
+
 ## Backends
 
 Both the SQLite and Postgres `sqlx` drivers are enabled together (SQLite via the
