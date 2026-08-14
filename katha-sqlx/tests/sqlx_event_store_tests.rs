@@ -1543,31 +1543,19 @@ async fn test_get_events_for_streams_page_walks_every_event_exactly_once() {
         expected.extend(seed_stream(&store, &format!("paged:entity-{n}"), 3).await);
     }
 
-    let mut seen: Vec<Uuid> = Vec::new();
-    let mut cursor = None;
-    loop {
-        let page: katha_sqlx::EventStreamsCursorPage<TestEvent, TestMetadata> = store
-            .get_events_for_streams_page(
-                &StreamsReadFilter::IdPrefix("paged:".to_string()),
-                &EventsReadRange::AllEvents,
-                cursor.as_ref(),
-                5,
-            )
-            .await
-            .unwrap();
+    let paged: Vec<EventRead<TestEvent, TestMetadata>> = common::drain_event_pages(
+        &store,
+        &StreamsReadFilter::IdPrefix("paged:".to_string()),
+        &EventsReadRange::AllEvents,
+        5,
+    )
+    .await;
 
-        assert!(page.items.len() <= 5, "page must respect the limit");
-        assert_ordered_by_time_then_id(&page.items);
-        seen.extend(page.items.iter().map(|e| e.id));
+    assert_ordered_by_time_then_id(&paged);
 
-        match page.next_cursor {
-            Some(next) => cursor = Some(next),
-            None => break,
-        }
-    }
-
-    assert_eq!(seen.len(), 12, "12 events across 4 streams, no duplicates");
-    for id in &expected {
-        assert!(seen.contains(id), "pagination dropped an event");
-    }
+    let mut seen: Vec<Uuid> = paged.iter().map(|e| e.id).collect();
+    assert_eq!(seen.len(), 12, "12 events across 4 streams");
+    seen.sort();
+    expected.sort();
+    assert_eq!(seen, expected, "paging must return each event exactly once");
 }
