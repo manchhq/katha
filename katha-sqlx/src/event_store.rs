@@ -23,6 +23,7 @@ use sqlx::{
     any::{Any, AnyPoolOptions},
 };
 use std::future::Future;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -42,11 +43,13 @@ impl SqlxEventStore {
             .connect("sqlite::memory:")
             .await?;
         let (notifier, _) = broadcast::channel(notification_buffer.max(1));
+        let (rows_notifier, _) = broadcast::channel(notification_buffer.max(1));
         Ok(Self {
             name: name.to_string(),
             pool,
             backend: Backend::Sqlite,
             notifier,
+            rows_notifier,
             cancel_token: CancellationToken::new(),
         })
     }
@@ -67,11 +70,13 @@ impl SqlxEventStore {
         let url = format!("sqlite://{path}?mode=rwc");
         let pool = AnyPoolOptions::new().connect(&url).await?;
         let (notifier, _) = broadcast::channel(notification_buffer.max(1));
+        let (rows_notifier, _) = broadcast::channel(notification_buffer.max(1));
         Ok(Self {
             name: name.to_string(),
             pool,
             backend: Backend::Sqlite,
             notifier,
+            rows_notifier,
             cancel_token: CancellationToken::new(),
         })
     }
@@ -95,11 +100,13 @@ impl SqlxEventStore {
         validate_store_name(name)?;
         let pool = AnyPoolOptions::new().connect(url).await?;
         let (notifier, _) = broadcast::channel(notification_buffer.max(1));
+        let (rows_notifier, _) = broadcast::channel(notification_buffer.max(1));
         Ok(Self {
             name: name.to_string(),
             pool,
             backend: Backend::from_url(url),
             notifier,
+            rows_notifier,
             cancel_token: CancellationToken::new(),
         })
     }
@@ -112,11 +119,13 @@ impl SqlxEventStore {
         validate_store_name(name)?;
         let backend = Backend::from_url(pool.connect_options().database_url.as_str());
         let (notifier, _) = broadcast::channel(DEFAULT_NOTIFICATION_BUFFER);
+        let (rows_notifier, _) = broadcast::channel(DEFAULT_NOTIFICATION_BUFFER);
         Ok(Self {
             name: name.to_string(),
             pool,
             backend,
             notifier,
+            rows_notifier,
             cancel_token: CancellationToken::new(),
         })
     }
@@ -485,6 +494,7 @@ impl SqlxEventStore {
             stream_id,
             &events_reads,
         ));
+        let _ = self.rows_notifier.send(Arc::new(event_reads_db));
         Ok(events_reads)
     }
 
@@ -568,40 +578,33 @@ where
     Meta: Send + Sync + 'static + Clone + Serialize + for<'de> Deserialize<'de>,
 {
     /// Subscribes to typed `EventRead` notifications after successful appends.
+    ///
+    /// The rows written by `append_events` are broadcast in-process, so each
+    /// subscriber builds its typed events by deserializing those rows directly.
+    /// No database round-trip is performed per delivered event.
+    ///
+    /// Events are delivered in append order. A row that fails to deserialize into
+    /// `EventRead<Payload, Meta>` is skipped, which is expected when a store holds
+    /// several payload types and a subscriber only handles one of them.
     fn event_appended(&self) -> Option<broadcast::Receiver<EventRead<Payload, Meta>>> {
-        let mut source = self.subscribe();
-        let pool = self.pool.clone();
-        let store_name = self.name.clone();
-        let backend = self.backend;
+        let mut source = self.rows_notifier.subscribe();
         let cancel_token = self.cancel_token.clone();
         let (tx, rx) = broadcast::channel(DEFAULT_NOTIFICATION_BUFFER);
 
         tokio::spawn(async move {
             loop {
-                let notification = tokio::select! {
+                let rows = tokio::select! {
                     biased;
                     _ = cancel_token.cancelled() => break,
                     result = source.recv() => match result {
-                        Ok(notification) => notification,
+                        Ok(rows) => rows,
                         Err(broadcast::error::RecvError::Closed) => break,
                         Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     },
                 };
 
-                for event_id in notification.event_ids {
-                    let row = sqlx::query_as::<_, EventReadDb>(&backend.bind(&format!(
-                        r#"SELECT id, correlation_id, causation_id, stream_id,
-                        version, name, data, metadata, created_utc FROM "{}_events"
-                        WHERE id = ? LIMIT 1"#,
-                        store_name
-                    )))
-                    .bind(event_id.to_string())
-                    .fetch_optional(&pool)
-                    .await;
-
-                    if let Ok(Some(event_db)) = row
-                        && let Ok(event_read) = EventRead::try_from(event_db)
-                    {
+                for row in rows.iter() {
+                    if let Ok(event_read) = EventRead::try_from(row) {
                         let _ = tx.send(event_read);
                     }
                 }

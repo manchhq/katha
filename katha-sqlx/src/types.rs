@@ -1,6 +1,8 @@
 use crate::backend::Backend;
+use crate::event_db::EventReadDb;
 use crate::notifications::EventNotification;
 use sqlx::AnyPool;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -10,6 +12,9 @@ pub struct SqlxEventStore {
     pub(crate) name: String,
     pub(crate) backend: Backend,
     pub(crate) notifier: broadcast::Sender<EventNotification>,
+    /// Carries the rows just written so `event_appended` can build typed events
+    /// in-process instead of re-reading them from the database.
+    pub(crate) rows_notifier: broadcast::Sender<Arc<Vec<EventReadDb>>>,
     pub(crate) cancel_token: CancellationToken,
 }
 

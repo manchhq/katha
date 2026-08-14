@@ -1240,3 +1240,88 @@ async fn test_get_events_page_empty_stream() {
     assert!(page.items.is_empty());
     assert!(page.next_cursor.is_none());
 }
+
+#[tokio::test]
+async fn test_event_appended_delivers_batch_in_version_order_with_full_fidelity() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    let mut rx = EventStore::<TestEvent, TestMetadata>::event_appended(&store)
+        .expect("sqlx store should expose event_appended observable");
+
+    let writes: Vec<EventWrite<TestEvent, TestMetadata>> = (0..5)
+        .map(|i| EventWrite::<TestEvent, TestMetadata> {
+            id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
+            causation_id: Some(Uuid::new_v4()),
+            data: TestEvent {
+                user_id: format!("user-{i}"),
+                action: format!("action-{i}"),
+                amount: Some(i * 10),
+            },
+            metadata: Some(TestMetadata {
+                source: format!("source-{i}"),
+                timestamp: Utc::now().to_rfc3339(),
+            }),
+            name: format!("BatchEvent{i}"),
+        })
+        .collect();
+
+    store
+        .append_events("batch_stream", &ExpectedVersion::NoStream, writes.clone())
+        .await
+        .unwrap();
+
+    for (index, write) in writes.iter().enumerate() {
+        let appended = timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("timed out waiting for typed appended event")
+            .expect("typed appended channel unexpectedly closed");
+
+        assert_eq!(
+            appended.version, index as u32,
+            "events must arrive in order"
+        );
+        assert_eq!(appended.id, write.id);
+        assert_eq!(appended.correlation_id, write.correlation_id);
+        assert_eq!(appended.causation_id, write.causation_id);
+        assert_eq!(appended.stream_id, "batch_stream");
+        assert_eq!(appended.name, write.name);
+        assert_eq!(appended.data, write.data);
+        assert_eq!(appended.metadata, write.metadata);
+    }
+}
+
+#[tokio::test]
+async fn test_event_appended_delivers_events_without_optional_fields() {
+    let store: SqlxEventStore = create_and_setup_memory_store().await;
+    let mut rx = EventStore::<TestEvent, TestMetadata>::event_appended(&store)
+        .expect("sqlx store should expose event_appended observable");
+
+    let write = EventWrite::<TestEvent, TestMetadata> {
+        id: Uuid::new_v4(),
+        correlation_id: None,
+        causation_id: None,
+        data: TestEvent {
+            user_id: "bare".to_string(),
+            action: "no-optionals".to_string(),
+            amount: None,
+        },
+        metadata: None,
+        name: "BareEvent".to_string(),
+    };
+
+    store
+        .append_event("bare_stream", &ExpectedVersion::NoStream, &write)
+        .await
+        .unwrap();
+
+    let appended = timeout(Duration::from_millis(500), rx.recv())
+        .await
+        .expect("timed out waiting for typed appended event")
+        .expect("typed appended channel unexpectedly closed");
+
+    assert_eq!(appended.id, write.id);
+    assert_eq!(appended.correlation_id, None);
+    assert_eq!(appended.causation_id, None);
+    assert_eq!(appended.metadata, None);
+    assert_eq!(appended.data, write.data);
+}
