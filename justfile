@@ -20,7 +20,8 @@ doc:
 # Extra args pass through to cargo-crap, e.g. `just crap --format github`.
 crap *args:
     cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --fail-above --threshold 30 {{args}}
+    # llvm-cov omits test source; score production code, not test orchestration.
+    cargo crap --lcov lcov.info --exclude "**/tests/**" --fail-above --threshold 30 {{args}}
 
 # Format all crates
 fmt:
