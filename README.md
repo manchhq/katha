@@ -17,6 +17,7 @@ A small, explicit event sourcing core for Rust. Inspired by the F# [CosmoStore](
 | [`katha-macros`](https://crates.io/crates/katha-macros) | Proc-macro helpers — `#[derive(EventName)]`; re-exported via katha's `macros` feature |
 | [`katha-sqlx`](https://crates.io/crates/katha-sqlx) | SQLite/Postgres backend — `SqlxEventStore` and `SqlxCommandStore` over sqlx |
 | [`katha-libsql`](katha-libsql/README.md) | Turso/libSQL backend — local SQLite and authenticated remote databases |
+| [`katha-turso`](katha-turso/README.md) | Persistent local-first event store with explicit Turso push/pull |
 
 ## Usage
 
@@ -30,6 +31,9 @@ katha-sqlx = "0.2"
 
 # Turso/libSQL backend (alternative to SQLx):
 katha-libsql = "0.2"
+
+# Local-first Turso sync (Rust 1.88+):
+katha-turso = "0.2"
 ```
 
 See the [katha README](https://github.com/manchhq/katha/blob/main/katha/README.md) for the full feature list and design notes, and [arch.md](https://github.com/manchhq/katha/blob/main/katha/arch.md) for design rationale.
