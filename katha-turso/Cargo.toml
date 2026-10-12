@@ -1,0 +1,30 @@
+[package]
+name = "katha-turso"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = "1.88"
+license = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+description = "Local-first Turso sync event store for katha"
+readme = "README.md"
+keywords = ["event-sourcing", "offline", "turso", "sync", "sqlite"]
+categories = ["database", "asynchronous"]
+
+[dependencies]
+katha = { workspace = true, default-features = false }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+fs2 = "0.4.3"
+turso = { version = "=0.8.2", default-features = false, features = ["sync", "pure-rust-crypto"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.release]
+tag = false
