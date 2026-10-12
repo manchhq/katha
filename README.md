@@ -16,6 +16,7 @@ A small, explicit event sourcing core for Rust. Inspired by the F# [CosmoStore](
 | [`katha`](https://crates.io/crates/katha) | Core traits (`EventStore`, `CommandStore`, `Aggregate`), event/stream types, and optimistic concurrency |
 | [`katha-macros`](https://crates.io/crates/katha-macros) | Proc-macro helpers — `#[derive(EventName)]`; re-exported via katha's `macros` feature |
 | [`katha-sqlx`](https://crates.io/crates/katha-sqlx) | SQLite/Postgres backend — `SqlxEventStore` and `SqlxCommandStore` over sqlx |
+| [`katha-libsql`](katha-libsql/README.md) | Turso/libSQL backend — local SQLite and authenticated remote databases |
 
 ## Usage
 
@@ -26,6 +27,9 @@ katha = "0.2"
 
 # SQLite/Postgres backend:
 katha-sqlx = "0.2"
+
+# Turso/libSQL backend (alternative to SQLx):
+katha-libsql = "0.2"
 ```
 
 See the [katha README](https://github.com/manchhq/katha/blob/main/katha/README.md) for the full feature list and design notes, and [arch.md](https://github.com/manchhq/katha/blob/main/katha/arch.md) for design rationale.
@@ -41,7 +45,7 @@ just test       # run the test suite (all features)
 just release patch   # bump version, commit, tag, push — CI publishes to crates.io
 ```
 
-Releases are tag-driven: `cargo release` bumps the shared workspace version, commits, tags `vX.Y.Z`, and pushes; the [release workflow](.github/workflows/release.yml) then builds, tests, and publishes all three crates to crates.io.
+Releases are tag-driven: `cargo release` bumps the shared workspace version, commits, tags `vX.Y.Z`, and pushes; the [release workflow](.github/workflows/release.yml) then builds, tests, and publishes all workspace crates to crates.io.
 
 ## License
 

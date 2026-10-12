@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["katha", "katha-macros", "katha-sqlx"]
+members = ["katha", "katha-macros", "katha-sqlx", "katha-libsql"]
 
 [workspace.package]
 version = "0.2.4"

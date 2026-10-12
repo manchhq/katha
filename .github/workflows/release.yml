@@ -43,3 +43,7 @@ jobs:
         run: cargo publish -p katha-sqlx
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish katha-libsql
+        run: cargo publish -p katha-libsql
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

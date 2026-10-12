@@ -1,0 +1,32 @@
+[package]
+name = "katha-libsql"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+description = "Turso/libSQL event-sourcing backend for katha"
+readme = "README.md"
+keywords = ["event-sourcing", "cqrs", "turso", "sqlite", "libsql"]
+categories = ["database", "asynchronous"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+katha = { workspace = true, default-features = false }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+libsql = { version = "0.9.30", default-features = false, features = ["core", "remote", "tls"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.release]
+tag = false
