@@ -6,8 +6,8 @@ Uses the official [libSQL Rust client](https://docs.turso.tech/sdk/rust/quicksta
 
 ```toml
 [dependencies]
-katha = "0.2"
-katha-libsql = "0.2"
+katha = "0.3"
+katha-libsql = "0.3"
 ```
 
 ```rust,no_run

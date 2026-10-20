@@ -41,10 +41,10 @@ The SQLite/Postgres backend now lives in the separate [`katha-sqlx`](https://cra
 ```toml
 [dependencies]
 # Core (traits + types, includes the macros feature by default):
-katha = "0.2"
+katha = "0.3"
 
 # SQLite/Postgres backend:
-katha-sqlx = "0.2"
+katha-sqlx = "0.3"
 ```
 
 ## The functional core

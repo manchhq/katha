@@ -11,6 +11,8 @@ use async_trait::async_trait;
 use katha::traits::command_store::CommandStore;
 use katha::types::command_write::{CommandRead, CommandWrite};
 use serde::{Deserialize, Serialize};
+// SQLx 0.9 requires explicit auditing of dynamic SQL. Store identifiers are
+// validated at construction; event, command and filter values use bind parameters.
 use sqlx::{AnyPool, Executor, any::AnyPoolOptions};
 use uuid::Uuid;
 
@@ -89,7 +91,7 @@ impl SqlxCommandStore {
                 if stmt.is_empty() {
                     continue;
                 }
-                if let Err(e) = tx.execute(stmt).await {
+                if let Err(e) = tx.execute(sqlx::AssertSqlSafe(stmt)).await {
                     // 0002 adds causation_id; ignore if column already exists (idempotent reopen).
                     // SQLite: "duplicate column name", Postgres: "already exists"
                     let msg = e.to_string();
@@ -122,11 +124,11 @@ where
     async fn append_command(&self, payload: &CommandWrite<Payload>) -> Result<()> {
         let command = CommandWriteDb::from(payload);
 
-        sqlx::query(&self.backend.bind(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"INSERT INTO "{}_commands" (id, correlation_id, causation_id, data, name, created_utc)
             VALUES (?, ?, ?, ?, ?, ?)"#,
             self.name
-        )))
+        ))))
         .bind(&command.id)
         .bind(&command.correlation_id)
         .bind(&command.causation_id)
@@ -141,14 +143,15 @@ where
 
     /// Fetches one command log entry by command id.
     async fn get_command(&self, id: &Uuid) -> Result<Option<CommandRead<Payload>>> {
-        let row = sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
-            r#"SELECT id, correlation_id, causation_id, data, name, created_utc
+        let row =
+            sqlx::query_as::<_, CommandReadDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
+                r#"SELECT id, correlation_id, causation_id, data, name, created_utc
             FROM "{}_commands" WHERE id = ?"#,
-            self.name
-        )))
-        .bind(id.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
+                self.name
+            ))))
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
 
         row.map(CommandRead::try_from)
             .transpose()
@@ -163,12 +166,14 @@ where
     ) -> Result<Vec<CommandRead<Payload>>> {
         let rows = match limit {
             Some(limit) => {
-                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
-                    r#"SELECT id, correlation_id, causation_id, data, name, created_utc
+                sqlx::query_as::<_, CommandReadDb>(sqlx::AssertSqlSafe(self.backend.bind(
+                    &format!(
+                        r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                     FROM "{}_commands"
                     ORDER BY created_utc DESC
                     LIMIT ? OFFSET ?"#,
-                    self.name
+                        self.name
+                    ),
                 )))
                 .bind(limit as i64)
                 .bind(offset as i64)
@@ -176,12 +181,14 @@ where
                 .await?
             }
             None => {
-                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
-                    r#"SELECT id, correlation_id, causation_id, data, name, created_utc
+                sqlx::query_as::<_, CommandReadDb>(sqlx::AssertSqlSafe(self.backend.bind(
+                    &format!(
+                        r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                     FROM "{}_commands"
                     ORDER BY created_utc DESC
                     LIMIT 9223372036854775807 OFFSET ?"#,
-                    self.name
+                        self.name
+                    ),
                 )))
                 .bind(offset as i64)
                 .fetch_all(&self.pool)
@@ -215,25 +222,29 @@ impl SqlxCommandStore {
 
         let rows = match cursor {
             None => {
-                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
-                    r#"SELECT id, correlation_id, causation_id, data, name, created_utc
+                sqlx::query_as::<_, CommandReadDb>(sqlx::AssertSqlSafe(self.backend.bind(
+                    &format!(
+                        r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                 FROM "{}_commands"
                 ORDER BY created_utc DESC, id DESC
                 LIMIT ?"#,
-                    self.name
+                        self.name
+                    ),
                 )))
                 .bind(fetch_limit)
                 .fetch_all(&self.pool)
                 .await?
             }
             Some(c) => {
-                sqlx::query_as::<_, CommandReadDb>(&self.backend.bind(&format!(
-                    r#"SELECT id, correlation_id, causation_id, data, name, created_utc
+                sqlx::query_as::<_, CommandReadDb>(sqlx::AssertSqlSafe(self.backend.bind(
+                    &format!(
+                        r#"SELECT id, correlation_id, causation_id, data, name, created_utc
                 FROM "{}_commands"
                 WHERE (created_utc, id) < (?, ?)
                 ORDER BY created_utc DESC, id DESC
                 LIMIT ?"#,
-                    self.name
+                        self.name
+                    ),
                 )))
                 .bind(c.created_utc.to_rfc3339())
                 .bind(c.id.to_string())

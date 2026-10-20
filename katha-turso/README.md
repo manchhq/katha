@@ -8,8 +8,8 @@ SQLite and remote libSQL access.
 
 ```toml
 [dependencies]
-katha = "0.2"
-katha-turso = "0.2"
+katha = "0.3"
+katha-turso = "0.3"
 ```
 
 ```rust,no_run

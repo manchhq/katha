@@ -18,22 +18,29 @@ A small, explicit event sourcing core for Rust. Inspired by the F# [CosmoStore](
 | [`katha-sqlx`](https://crates.io/crates/katha-sqlx) | SQLite/Postgres backend — `SqlxEventStore` and `SqlxCommandStore` over sqlx |
 | [`katha-libsql`](katha-libsql/README.md) | Turso/libSQL backend — local SQLite and authenticated remote databases |
 | [`katha-turso`](katha-turso/README.md) | Persistent local-first event store with explicit Turso push/pull |
+| [`katha-rusqlite`](katha-rusqlite/README.md) | Rusqlite event store with durable projection receipts; optional `powersync` feature |
+| [`katha-powersync`](katha-powersync/README.md) | Managed PowerSync writes, remote notifications, and projection recovery |
 
 ## Usage
 
 ```toml
 [dependencies]
 # Core (traits + types, includes the macros feature by default):
-katha = "0.2"
+katha = "0.3"
 
-# SQLite/Postgres backend:
-katha-sqlx = "0.2"
+# SQLite/Postgres backend (SQLx 0.9, Rust 1.94+):
+katha-sqlx = "0.3"
 
 # Turso/libSQL backend (alternative to SQLx):
-katha-libsql = "0.2"
+katha-libsql = "0.3"
 
 # Local-first Turso sync (Rust 1.88+):
-katha-turso = "0.2"
+katha-turso = "0.3"
+
+# Rusqlite (Rust 1.94+); add features = ["powersync"] for managed sync:
+katha-rusqlite = "0.3"
+# Or use the convenience PowerSync crate:
+katha-powersync = "0.3"
 ```
 
 See the [katha README](https://github.com/manchhq/katha/blob/main/katha/README.md) for the full feature list and design notes, and [arch.md](https://github.com/manchhq/katha/blob/main/katha/arch.md) for design rationale.
