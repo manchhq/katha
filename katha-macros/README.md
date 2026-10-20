@@ -43,5 +43,5 @@ single exception forced by the language.
 Enable via `katha`'s `macros` feature:
 
 ```toml
-katha = "0.2"
+katha = "0.3"
 ```

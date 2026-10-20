@@ -18,6 +18,8 @@ use katha::types::event_write::EventWrite;
 use katha::types::expected_version::ExpectedVersion;
 use katha::types::stream_read_filter::StreamsReadFilter;
 use serde::{Deserialize, Serialize};
+// SQLx 0.9 requires explicit auditing of dynamic SQL. Store identifiers are
+// validated at construction; event, command and filter values use bind parameters.
 use sqlx::{
     AnyPool, Executor, Transaction,
     any::{Any, AnyPoolOptions},
@@ -40,8 +42,8 @@ enum FilterBind {
 impl FilterBind {
     fn apply<'q, R>(
         self,
-        query: sqlx::query::QueryAs<'q, Any, R, sqlx::any::AnyArguments<'q>>,
-    ) -> sqlx::query::QueryAs<'q, Any, R, sqlx::any::AnyArguments<'q>> {
+        query: sqlx::query::QueryAs<'q, Any, R, sqlx::any::AnyArguments>,
+    ) -> sqlx::query::QueryAs<'q, Any, R, sqlx::any::AnyArguments> {
         match self {
             FilterBind::Text(value) => query.bind(value),
             FilterBind::Int(value) => query.bind(value),
@@ -238,7 +240,7 @@ impl SqlxEventStore {
         let template = include_str!("../migrations/0003_events_payload_gin_index.sql");
         let sql = template.replace("{{name}}", &self.name);
 
-        self.pool.execute(sql.as_str()).await?;
+        self.pool.execute(sqlx::AssertSqlSafe(sql.as_str())).await?;
         Ok(true)
     }
 
@@ -271,7 +273,7 @@ impl SqlxEventStore {
         let template = include_str!("../migrations/0004_events_payload_json_check.sql");
         let sql = template.replace("{{name}}", &self.name);
 
-        match self.pool.execute(sql.as_str()).await {
+        match self.pool.execute(sqlx::AssertSqlSafe(sql.as_str())).await {
             Ok(_) => Ok(true),
             // Postgres has no ADD CONSTRAINT IF NOT EXISTS, so a repeat call
             // reports that the constraint already exists. That is success.
@@ -289,7 +291,7 @@ impl SqlxEventStore {
                 if stmt.is_empty() {
                     continue;
                 }
-                tx.execute(stmt).await?;
+                tx.execute(sqlx::AssertSqlSafe(stmt)).await?;
             }
         }
         tx.commit().await?;
@@ -299,12 +301,18 @@ impl SqlxEventStore {
     /// Deletes all events and streams, then re-runs the schema migration so the
     /// store is in the same state as a fresh install. Used by the admin reset endpoint.
     pub async fn reset_all(&self) -> Result<()> {
-        sqlx::query(&format!(r#"DELETE FROM "{}_events""#, self.name))
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(&format!(r#"DELETE FROM "{}_streams""#, self.name))
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"DELETE FROM "{}_events""#,
+            self.name
+        )))
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"DELETE FROM "{}_streams""#,
+            self.name
+        )))
+        .execute(&self.pool)
+        .await?;
         self.ensure_event_tables().await
     }
 
@@ -313,7 +321,7 @@ impl SqlxEventStore {
     /// Projections can use this table to deduplicate event processing by
     /// `(projection_name, event_id)`.
     pub async fn ensure_projection_idempotency_table(&self) -> Result<()> {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
             CREATE TABLE IF NOT EXISTS "{}_projection_processed" (
                 projection_name TEXT NOT NULL,
@@ -323,7 +331,7 @@ impl SqlxEventStore {
             )
             "#,
             self.name
-        ))
+        )))
         .execute(&self.pool)
         .await?;
 
@@ -339,14 +347,14 @@ impl SqlxEventStore {
         projection_name: &str,
         event_id: &Uuid,
     ) -> Result<bool> {
-        let result = sqlx::query(&self.backend.bind(&format!(
+        let result = sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"
             INSERT INTO "{}_projection_processed" (projection_name, event_id, processed_utc)
             VALUES (?, ?, ?)
             ON CONFLICT DO NOTHING
             "#,
             self.name
-        )))
+        ))))
         .bind(projection_name)
         .bind(event_id.to_string())
         .bind(Utc::now().to_rfc3339())
@@ -378,13 +386,13 @@ impl SqlxEventStore {
     /// Only markers for the named projection are removed; other projections are
     /// untouched.
     pub async fn reset_projection(&self, projection_name: &str) -> Result<u64> {
-        let result = sqlx::query(&self.backend.bind(&format!(
+        let result = sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"
             DELETE FROM "{}_projection_processed"
             WHERE projection_name = ?
             "#,
             self.name
-        )))
+        ))))
         .bind(projection_name)
         .execute(&self.pool)
         .await?;
@@ -394,13 +402,13 @@ impl SqlxEventStore {
 
     /// Returns whether a projection has already processed a given event.
     pub async fn is_event_processed(&self, projection_name: &str, event_id: &Uuid) -> Result<bool> {
-        let row = sqlx::query_scalar::<_, i64>(&self.backend.bind(&format!(
+        let row = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"
             SELECT COUNT(1) FROM "{}_projection_processed"
             WHERE projection_name = ? AND event_id = ?
             "#,
             self.name
-        )))
+        ))))
         .bind(projection_name)
         .bind(event_id.to_string())
         .fetch_one(&self.pool)
@@ -440,13 +448,13 @@ impl SqlxEventStore {
         }
 
         if let Err(error) = apply(event).await {
-            sqlx::query(&self.backend.bind(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
                 r#"
                 DELETE FROM "{}_projection_processed"
                 WHERE projection_name = ? AND event_id = ?
                 "#,
                 self.name
-            )))
+            ))))
             .bind(projection_name)
             .bind(event.id.to_string())
             .execute(&self.pool)
@@ -481,14 +489,14 @@ impl SqlxEventStore {
         F: FnOnce(&EventRead<Payload, Meta>, &mut Transaction<'c, Any>) -> Fut,
         Fut: Future<Output = Result<()>>,
     {
-        let result = sqlx::query(&self.backend.bind(&format!(
+        let result = sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"
             INSERT INTO "{}_projection_processed" (projection_name, event_id, processed_utc)
             VALUES (?, ?, ?)
             ON CONFLICT DO NOTHING
             "#,
             self.name
-        )))
+        ))))
         .bind(projection_name)
         .bind(event.id.to_string())
         .bind(Utc::now().to_rfc3339())
@@ -522,10 +530,10 @@ impl SqlxEventStore {
             anyhow::anyhow!("Stream version overflow: batch size would exceed u32::MAX")
         })?;
 
-        let stream_opt = sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
+        let stream_opt = sqlx::query_as::<_, StreamsDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             "SELECT id, last_version, last_updated_utc FROM \"{}_streams\" WHERE id = ? LIMIT 1",
             self.name
-        )))
+        ))))
         .bind(stream_id)
         .fetch_optional(&self.pool)
         .await?;
@@ -629,12 +637,12 @@ impl SqlxEventStore {
 
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(&self.backend.bind(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"INSERT INTO "{}_streams" (id, last_version, last_updated_utc)
             VALUES (?, ?, ?) ON CONFLICT(id)
             DO UPDATE SET last_version = excluded.last_version, last_updated_utc = excluded.last_updated_utc"#,
             self.name
-        )))
+        ))))
         .bind(&updated_stream_db.id)
         .bind(updated_stream_db.last_version)
         .bind(&updated_stream_db.last_updated_utc)
@@ -642,11 +650,11 @@ impl SqlxEventStore {
         .await?;
 
         for event in &event_reads_db {
-            sqlx::query(&self.backend.bind(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(self.backend.bind(&format!(
                 r#"INSERT INTO "{}_events" (id, correlation_id, causation_id, stream_id, version, name, data, metadata, created_utc)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                 self.name
-            )))
+            ))))
             .bind(&event.id)
             .bind(&event.correlation_id)
             .bind(&event.causation_id)
@@ -689,19 +697,20 @@ impl SqlxEventStore {
         let fetch_limit = (limit.max(1) + 1) as i64;
         let start_after = cursor.map_or(-1_i64, i64::from);
 
-        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
-            r#"SELECT id, correlation_id, causation_id, stream_id,
+        let rows =
+            sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
+                r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE stream_id = ? AND version > ?
             ORDER BY version ASC
             LIMIT ?"#,
-            self.name
-        )))
-        .bind(stream_id)
-        .bind(start_after)
-        .bind(fetch_limit)
-        .fetch_all(&self.pool)
-        .await?;
+                self.name
+            ))))
+            .bind(stream_id)
+            .bind(start_after)
+            .bind(fetch_limit)
+            .fetch_all(&self.pool)
+            .await?;
 
         let has_more = rows.len() > limit.max(1);
         let mut page_items: Vec<EventRead<Payload, Meta>> = rows
@@ -825,7 +834,7 @@ impl SqlxEventStore {
             name = self.name
         ));
 
-        let mut query = sqlx::query_as::<_, EventReadDb>(&sql);
+        let mut query = sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(sql));
         for bind in filter_binds {
             query = bind.apply(query);
         }
@@ -881,7 +890,7 @@ impl SqlxEventStore {
             name = self.name
         ));
 
-        let mut query = sqlx::query_as::<_, EventReadDb>(&sql);
+        let mut query = sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(sql));
         for bind in filter_binds {
             query = bind.apply(query);
         }
@@ -1005,16 +1014,17 @@ where
     }
 
     async fn get_event(&self, stream_id: &str, version: u32) -> Result<EventRead<Payload, Meta>> {
-        let row = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
-            r#"SELECT id, correlation_id, causation_id, stream_id,
+        let row =
+            sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
+                r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE stream_id = ? AND version = ?"#,
-            self.name
-        )))
-        .bind(stream_id)
-        .bind(version as i64)
-        .fetch_optional(&self.pool)
-        .await?;
+                self.name
+            ))))
+            .bind(stream_id)
+            .bind(version as i64)
+            .fetch_optional(&self.pool)
+            .await?;
 
         match row {
             Some(event_read_db) => EventRead::try_from(event_read_db)
@@ -1038,18 +1048,19 @@ where
             } => (*from_version, *to_version),
         };
 
-        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
-            r#"SELECT id, correlation_id, causation_id, stream_id,
+        let rows =
+            sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
+                r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE stream_id = ? AND version >= ? AND version <= ?
             ORDER BY version ASC"#,
-            self.name
-        )))
-        .bind(stream_id)
-        .bind(start_version as i64)
-        .bind(end_version as i64)
-        .fetch_all(&self.pool)
-        .await?;
+                self.name
+            ))))
+            .bind(stream_id)
+            .bind(start_version as i64)
+            .bind(end_version as i64)
+            .fetch_all(&self.pool)
+            .await?;
 
         rows.into_iter()
             .map(EventRead::try_from)
@@ -1061,15 +1072,16 @@ where
         &self,
         correlation_id: &Uuid,
     ) -> Result<Vec<EventRead<Payload, Meta>>> {
-        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
-            r#"SELECT id, correlation_id, causation_id, stream_id,
+        let rows =
+            sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
+                r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE correlation_id = ? ORDER BY created_utc ASC"#,
-            self.name
-        )))
-        .bind(correlation_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+                self.name
+            ))))
+            .bind(correlation_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
         rows.into_iter()
             .map(EventRead::try_from)
@@ -1081,15 +1093,16 @@ where
         &self,
         causation_id: &Uuid,
     ) -> Result<Vec<EventRead<Payload, Meta>>> {
-        let rows = sqlx::query_as::<_, EventReadDb>(&self.backend.bind(&format!(
-            r#"SELECT id, correlation_id, causation_id, stream_id,
+        let rows =
+            sqlx::query_as::<_, EventReadDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
+                r#"SELECT id, correlation_id, causation_id, stream_id,
             version, name, data, metadata, created_utc FROM "{}_events"
             WHERE causation_id = ? ORDER BY created_utc ASC"#,
-            self.name
-        )))
-        .bind(causation_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+                self.name
+            ))))
+            .bind(causation_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
         rows.into_iter()
             .map(EventRead::try_from)
@@ -1106,7 +1119,7 @@ where
             self.name
         ));
 
-        let mut query = sqlx::query_as::<_, StreamsDb>(&sql);
+        let mut query = sqlx::query_as::<_, StreamsDb>(sqlx::AssertSqlSafe(sql));
         for bind in binds {
             query = bind.apply(query);
         }
@@ -1119,10 +1132,10 @@ where
     }
 
     async fn get_stream(&self, stream_id: &str) -> Result<EventStream> {
-        let row = sqlx::query_as::<_, StreamsDb>(&self.backend.bind(&format!(
+        let row = sqlx::query_as::<_, StreamsDb>(sqlx::AssertSqlSafe(self.backend.bind(&format!(
             r#"SELECT id, last_version, last_updated_utc FROM "{}_streams" WHERE id = ?"#,
             self.name
-        )))
+        ))))
         .bind(stream_id)
         .fetch_optional(&self.pool)
         .await?;

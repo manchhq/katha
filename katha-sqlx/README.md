@@ -6,12 +6,15 @@
 
 SQLite/Postgres event-sourcing backend for [`katha`](https://github.com/manchhq/katha) — provides `SqlxEventStore` and `SqlxCommandStore` over [`sqlx`](https://github.com/launchbadge/sqlx).
 
+Uses SQLx 0.9 and requires Rust 1.94+. The SQLite backend shares
+`libsqlite3-sys` 0.37 with rusqlite 0.39 and PowerSync 0.1.1.
+
 ## Install
 
 ```toml
 [dependencies]
-katha = "0.2"
-katha-sqlx = "0.2"
+katha = "0.3"
+katha-sqlx = "0.3"
 ```
 
 ## Quick start
