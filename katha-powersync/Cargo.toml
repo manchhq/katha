@@ -10,7 +10,7 @@ description = "Managed PowerSync event-sourcing backend for katha"
 readme = "README.md"
 
 [dependencies]
-katha-rusqlite = { version = "0.2.6", path = "../katha-rusqlite", features = ["powersync"] }
+katha-rusqlite = { version = "0.3.0", path = "../katha-rusqlite", features = ["powersync"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

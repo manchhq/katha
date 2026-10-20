@@ -1884,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "katha"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "katha-libsql"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1916,7 +1916,7 @@ dependencies = [
 
 [[package]]
 name = "katha-macros"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "katha",
  "proc-macro2",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "katha-powersync"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "futures-lite",
@@ -1938,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "katha-rusqlite"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1956,7 +1956,7 @@ dependencies = [
 
 [[package]]
 name = "katha-sqlx"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1975,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "katha-turso"
-version = "0.2.6"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
